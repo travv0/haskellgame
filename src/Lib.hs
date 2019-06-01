@@ -42,6 +42,9 @@ instance Component Particle where type Storage Particle = Map Particle
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
+newtype Jumping = Jumping Float deriving Show
+instance Component Jumping where type Storage Jumping = Map Jumping
+
 data IsShooting = IsShooting Float Direction deriving Show
 instance Component IsShooting where type Storage IsShooting = Map IsShooting
 
@@ -73,15 +76,19 @@ makeWorld "World"
   , ''IsShooting
   , ''Gravity
   , ''Keys
+  , ''Jumping
   ]
 
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerCooldown, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
+playerSpeed, playerCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
   :: Float
 playerSpeed = 170
 playerCooldown = 5
+playerJumpTime = 30
+jumpVelocity = 200
+gravity = 500
 bulletSpeed = 300
 enemySpeed = 80
 xmin = -100
@@ -100,7 +107,8 @@ scorePos = V2 xmin (-170)
 
 initialize :: System' ()
 initialize = do
-  _playerEty <- newEntity (Player, Position playerPos, Velocity 0, Gravity 200)
+  _playerEty <- newEntity
+    (Player, Position playerPos, Velocity 0, Gravity gravity)
   return ()
 
 stepPosition :: Float -> System' ()
@@ -113,6 +121,13 @@ stepVelocity dT =
 clampPlayer :: System' ()
 clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
   Position (V2 (min xmax . max xmin $ x) (min ymax . max ymin $ y))
+
+playerJump :: Float -> System' ()
+playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
+  if jumpTime > 0
+    then Right
+      (Velocity (V2 x jumpVelocity), Jumping (jumpTime - cooldownAdjust * dT))
+    else Left $ Not @Jumping
 
 playerShoot :: Float -> System' ()
 playerShoot dT =
@@ -169,6 +184,7 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 step :: Float -> System' ()
 step dT = do
   incrTime dT
+  playerJump dT
   playerShoot dT
   stepVelocity dT
   stepPosition dT
@@ -205,7 +221,10 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 x 200)
+  cmap $ \(Player, Not :: Not Jumping) -> Jumping playerJumpTime
+
+handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
+  cmap $ \(Player, Jumping _) -> Not @Jumping
 
 handleEvent (EventKey (Char 'x') Down _ _) = do
   cmap $ \Player -> IsShooting 0 R
