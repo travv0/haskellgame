@@ -18,6 +18,8 @@ import           System.Exit
 import           Control.Monad
 import           Data.Semigroup                 ( Semigroup )
 
+data Direction = L | R deriving (Eq, Show)
+
 newtype Position = Position (V2 Float) deriving Show
 instance Component Position where type Storage Position = Map Position
 
@@ -35,6 +37,9 @@ instance Component Particle where type Storage Particle = Map Particle
 
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
+
+data IsShooting = IsShooting Int Direction deriving Show
+instance Component IsShooting where type Storage IsShooting = Unique IsShooting
 
 newtype Score = Score Int deriving (Show, Num)
 instance Semigroup Score where (<>) = (+)
@@ -56,20 +61,21 @@ makeWorld "World"
   , ''Time
   , ''Particle
   , ''Camera
+  , ''IsShooting
   ]
 
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, bulletSpeed, bulletSpeedChange, enemySpeed, xmin, xmax :: Float
+playerSpeed, bulletSpeed, enemySpeed, xmin, xmax :: Float
 playerSpeed = 170
-bulletSpeed = 1
-bulletSpeedChange = 1.1
+bulletSpeed = 300
 enemySpeed = 80
 xmin = -100
 xmax = 100
 
-hitBonus, missPenalty :: Int
+playerCooldown, hitBonus, missPenalty :: Int
+playerCooldown = 5
 hitBonus = 100
 missPenalty = 40
 
@@ -89,6 +95,18 @@ clampPlayer :: System' ()
 clampPlayer = cmap
   $ \(Player, Position (V2 x y)) -> Position (V2 (min xmax . max xmin $ x) y)
 
+playerShoot :: System' ()
+playerShoot =
+  cmapM_
+    $ \(Player, pos, Velocity (V2 x _), IsShooting cooldown dir) ->
+        if cooldown <= 0
+          then do
+            let bulletXVel = if dir == L then (-bulletSpeed) else bulletSpeed
+            _ <- newEntity (Bullet, pos, Velocity (V2 bulletXVel 0))
+            spawnParticles 7 pos (-80, 80) (10, 100)
+            cmap $ \Player -> IsShooting playerCooldown dir
+          else cmap $ \Player -> IsShooting (cooldown - 1) dir
+
 incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
@@ -101,12 +119,9 @@ stepParticles dT = cmap $ \(Particle t) ->
   if t < 0 then Right $ Not @(Particle, Kinetic) else Left $ Particle (t - dT)
 
 stepBullets :: System' ()
-stepBullets =
-  cmap
-    $ \(Bullet, Position (V2 _ py), Score s, Velocity (V2 vx vy)) -> if py > 170
-        then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
-        else Left
-          $ Velocity (V2 (vx / bulletSpeedChange) (vy * bulletSpeedChange))
+stepBullets = cmap $ \(Bullet, Position (V2 _ py), Score s) -> if py > 170
+  then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
+  else Left ()
 
 handleCollisions :: System' ()
 handleCollisions = cmapM_ $ \(Target, Position posT, etyT) ->
@@ -134,6 +149,7 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 step :: Float -> System' ()
 step dT = do
   incrTime dT
+  playerShoot
   stepPosition dT
   clampPlayer
   clearTargets
@@ -159,9 +175,10 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x - playerSpeed) 0)
 
 handleEvent (EventKey (SpecialKey KeySpace) Down _ _) =
-  cmapM_ $ \(Player, pos, Velocity (V2 x _)) -> do
-    _ <- newEntity (Bullet, pos, Velocity (V2 x bulletSpeed))
-    spawnParticles 7 pos (-80, 80) (10, 100)
+  cmap $ \Player -> IsShooting playerCooldown R
+
+handleEvent (EventKey (SpecialKey KeySpace) Up _ _) =
+  cmap $ \Player -> Not @IsShooting
 
 handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
 
@@ -170,21 +187,21 @@ handleEvent _ = return ()
 translate' :: Position -> Picture -> Picture
 translate' (Position (V2 x y)) = translate x y
 
-triangle, diamond :: Picture
-triangle = Line [(0, 0), (-0.5, -1), (0.5, -1), (0, 0)]
+playerPic, diamond :: Picture
+playerPic = Line [(0, 0), (-0.5, -1), (0.5, -1), (0, 0)]
 diamond = Line [(-1, 0), (0, -1), (1, 0), (0, 1), (-1, 0)]
 
 draw :: System' Picture
 draw = do
   player <- foldDraw
-    $ \(Player, pos) -> translate' pos . color white . scale 10 20 $ triangle
+    $ \(Player, pos) -> translate' pos . color white . scale 10 20 $ playerPic
   targets <- foldDraw
-    $ \(Target, pos) -> translate' pos . color red . scale 10 10 $ diamond
+    $ \(Target, pos) -> translate' pos . color white . scale 10 10 $ diamond
   bullets <- foldDraw
-    $ \(Bullet, pos) -> translate' pos . color yellow . scale 4 4 $ diamond
+    $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
 
   particles <- foldDraw $ \(Particle _, Velocity (V2 vx vy), pos) ->
-    translate' pos . color orange $ Line [(0, 0), (vx / 10, vy / 10)]
+    translate' pos . color white $ Line [(0, 0), (vx / 10, vy / 10)]
 
   Score s <- get global
   let score =
