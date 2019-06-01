@@ -25,6 +25,7 @@ dependencies:
 - apecs-gloss
 - linear
 - random
+- containers
 
 library:
   source-dirs: src

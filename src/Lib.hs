@@ -12,11 +12,12 @@ module Lib where
 
 import           Apecs
 import           Apecs.Gloss
-import           Linear
-import           System.Random
-import           System.Exit
 import           Control.Monad
 import           Data.Semigroup                 ( Semigroup )
+import           Linear
+import           System.Exit
+import           System.Random
+import qualified Data.Set                      as Set
 
 data Direction = L | R deriving (Eq, Show)
 
@@ -42,7 +43,12 @@ data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
 data IsShooting = IsShooting Float Direction deriving Show
-instance Component IsShooting where type Storage IsShooting = Unique IsShooting
+instance Component IsShooting where type Storage IsShooting = Map IsShooting
+
+newtype Keys = Keys (Set.Set Key) deriving Show
+instance Semigroup Keys where Keys s1 <> Keys s2 = Keys (s1 <> s2)
+instance Monoid Keys where mempty = Keys Set.empty
+instance Component Keys where type Storage Keys = Global Keys
 
 newtype Score = Score Int deriving (Show, Num)
 instance Semigroup Score where (<>) = (+)
@@ -66,12 +72,13 @@ makeWorld "World"
   , ''Camera
   , ''IsShooting
   , ''Gravity
+  , ''Keys
   ]
 
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerCooldown, bulletSpeed, enemySpeed, xmin, xmax, cooldownAdjust
+playerSpeed, playerCooldown, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
   :: Float
 playerSpeed = 170
 playerCooldown = 5
@@ -79,6 +86,8 @@ bulletSpeed = 300
 enemySpeed = 80
 xmin = -100
 xmax = 100
+ymin = -170
+ymax = 170
 cooldownAdjust = 100
 
 hitBonus, missPenalty :: Int
@@ -102,8 +111,8 @@ stepVelocity dT =
   cmap $ \(Velocity (V2 x y), Gravity g) -> Velocity (V2 x (y - dT * g))
 
 clampPlayer :: System' ()
-clampPlayer = cmap
-  $ \(Player, Position (V2 x y)) -> Position (V2 (min xmax . max xmin $ x) y)
+clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
+  Position (V2 (min xmax . max xmin $ x) (min ymax . max ymin $ y))
 
 playerShoot :: Float -> System' ()
 playerShoot dT =
@@ -111,9 +120,10 @@ playerShoot dT =
     $ \(Player, pos, Velocity (V2 x _), IsShooting cooldown dir) ->
         if cooldown <= 0
           then do
-            let bulletXVel = if dir == L then (-bulletSpeed) else bulletSpeed
-            _ <- newEntity (Bullet, pos, Velocity (V2 (bulletXVel + x) 0))
-            spawnParticles 7 pos (-80, 80) (10, 100)
+            let dirMod = if dir == L then negate else id
+            _ <- newEntity
+              (Bullet, pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
+            spawnParticles 7 pos (dirMod 10, dirMod 100) (-80, 80)
             cmap $ \Player -> IsShooting playerCooldown dir
           else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
@@ -172,27 +182,52 @@ step dT = do
   triggerEvery dT 0.6 0.3 $ newEntity
     (Target, Position (V2 xmax 120), Velocity (V2 (negate enemySpeed) 0))
 
+handleInput :: Event -> System' Event
+handleInput event@(EventKey k Down _ _) = do
+  modify global $ \(Keys keys) -> Keys $ Set.insert k keys
+  return event
+handleInput event@(EventKey k Up _ _) = do
+  modify global $ \(Keys keys) -> Keys $ Set.delete k keys
+  return event
+handleInput event = return event
+
 handleEvent :: Event -> System' ()
 handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x - playerSpeed) 0)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyLeft) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x + playerSpeed) 0)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x + playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyRight) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x + playerSpeed) 0)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x + playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x - playerSpeed) 0)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
   cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 x 200)
 
-handleEvent (EventKey (SpecialKey KeySpace) Down _ _) =
+handleEvent (EventKey (Char 'x') Down _ _) = do
   cmap $ \Player -> IsShooting 0 R
+  cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
 
-handleEvent (EventKey (SpecialKey KeySpace) Up _ _) =
-  cmap $ \Player -> Not @IsShooting
+handleEvent (EventKey (Char 'x') Up _ _) =
+  cmapM_
+    $ \(Player, IsShooting timeout _, Keys keys, e) ->
+        if Set.member (Char 'z') keys
+          then set e (IsShooting timeout L)
+          else destroy e (Proxy @IsShooting)
+
+handleEvent (EventKey (Char 'z') Down _ _) = do
+  cmap $ \Player -> IsShooting 0 L
+  cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
+
+handleEvent (EventKey (Char 'z') Up _ _) =
+  cmapM_
+    $ \(Player, IsShooting timeout _, Keys keys, e) ->
+        if Set.member (Char 'x') keys
+          then set e (IsShooting timeout R)
+          else destroy e (Proxy @IsShooting)
 
 handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
 
