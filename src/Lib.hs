@@ -26,6 +26,9 @@ instance Component Position where type Storage Position = Map Position
 newtype Velocity = Velocity (V2 Float) deriving Show
 instance Component Velocity where type Storage Velocity = Map Velocity
 
+newtype Gravity = Gravity Float deriving Show
+instance Component Gravity where type Storage Gravity = Map Gravity
+
 data Target = Target deriving Show
 instance Component Target where type Storage Target = Map Target
 
@@ -38,7 +41,7 @@ instance Component Particle where type Storage Particle = Map Particle
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
-data IsShooting = IsShooting Int Direction deriving Show
+data IsShooting = IsShooting Float Direction deriving Show
 instance Component IsShooting where type Storage IsShooting = Unique IsShooting
 
 newtype Score = Score Int deriving (Show, Num)
@@ -62,20 +65,23 @@ makeWorld "World"
   , ''Particle
   , ''Camera
   , ''IsShooting
+  , ''Gravity
   ]
 
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, bulletSpeed, enemySpeed, xmin, xmax :: Float
+playerSpeed, playerCooldown, bulletSpeed, enemySpeed, xmin, xmax, cooldownAdjust
+  :: Float
 playerSpeed = 170
+playerCooldown = 5
 bulletSpeed = 300
 enemySpeed = 80
 xmin = -100
 xmax = 100
+cooldownAdjust = 100
 
-playerCooldown, hitBonus, missPenalty :: Int
-playerCooldown = 5
+hitBonus, missPenalty :: Int
 hitBonus = 100
 missPenalty = 40
 
@@ -85,27 +91,31 @@ scorePos = V2 xmin (-170)
 
 initialize :: System' ()
 initialize = do
-  _playerEty <- newEntity (Player, Position playerPos, Velocity 0)
+  _playerEty <- newEntity (Player, Position playerPos, Velocity 0, Gravity 200)
   return ()
 
 stepPosition :: Float -> System' ()
 stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
 
+stepVelocity :: Float -> System' ()
+stepVelocity dT =
+  cmap $ \(Velocity (V2 x y), Gravity g) -> Velocity (V2 x (y - dT * g))
+
 clampPlayer :: System' ()
 clampPlayer = cmap
   $ \(Player, Position (V2 x y)) -> Position (V2 (min xmax . max xmin $ x) y)
 
-playerShoot :: System' ()
-playerShoot =
+playerShoot :: Float -> System' ()
+playerShoot dT =
   cmapM_
     $ \(Player, pos, Velocity (V2 x _), IsShooting cooldown dir) ->
         if cooldown <= 0
           then do
             let bulletXVel = if dir == L then (-bulletSpeed) else bulletSpeed
-            _ <- newEntity (Bullet, pos, Velocity (V2 bulletXVel 0))
+            _ <- newEntity (Bullet, pos, Velocity (V2 (bulletXVel + x) 0))
             spawnParticles 7 pos (-80, 80) (10, 100)
             cmap $ \Player -> IsShooting playerCooldown dir
-          else cmap $ \Player -> IsShooting (cooldown - 1) dir
+          else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
 incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
@@ -149,7 +159,8 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 step :: Float -> System' ()
 step dT = do
   incrTime dT
-  playerShoot
+  playerShoot dT
+  stepVelocity dT
   stepPosition dT
   clampPlayer
   clearTargets
@@ -174,8 +185,11 @@ handleEvent (EventKey (SpecialKey KeyRight) Down _ _) =
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 (x - playerSpeed) 0)
 
+handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
+  cmap $ \(Player, Velocity (V2 x _)) -> Velocity (V2 x 200)
+
 handleEvent (EventKey (SpecialKey KeySpace) Down _ _) =
-  cmap $ \Player -> IsShooting playerCooldown R
+  cmap $ \Player -> IsShooting 0 R
 
 handleEvent (EventKey (SpecialKey KeySpace) Up _ _) =
   cmap $ \Player -> Not @IsShooting
