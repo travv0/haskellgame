@@ -151,13 +151,16 @@ playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
 playerShoot :: Float -> System' ()
 playerShoot dT =
   cmapM_
-    $ \(Player, pos, Velocity (V2 x _), IsShooting cooldown dir) ->
+    $ \(Player, pos, Velocity (V2 x y), IsShooting cooldown dir) ->
         if cooldown <= 0
           then do
             let dirMod = if dir == L then negate else id
             _ <- newEntity
               (Bullet, pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
-            spawnParticles 7 pos (dirMod 10, dirMod 100) (-80, 80)
+            spawnParticles 7
+                           pos
+                           (dirMod 10 + x * dT, dirMod 100 + x * dT)
+                           (-80 + y * dT      , 80 + y * dT)
             cmap $ \Player -> IsShooting playerBulletCooldown dir
           else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
