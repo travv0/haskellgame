@@ -187,7 +187,7 @@ handleCollisions dT = do
       when (norm (posT - posB) < 10) $ do
         destroy etyT (Proxy @(Enemy, Kinetic))
         destroy etyB (Proxy @(Bullet, Kinetic))
-        spawnParticles 15 (Position posB) (-500, 500) (200, -50)
+        spawnParticles 15 (Position posB) (-200, 200) (-200, 200)
         modify global $ \(Score x) -> Score (x + hitBonus)
 
   cmapM_
