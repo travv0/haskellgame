@@ -30,8 +30,8 @@ instance Component Velocity where type Storage Velocity = Map Velocity
 newtype Gravity = Gravity Float deriving Show
 instance Component Gravity where type Storage Gravity = Map Gravity
 
-data Target = Target deriving Show
-instance Component Target where type Storage Target = Map Target
+data Enemy = Enemy deriving Show
+instance Component Enemy where type Storage Enemy = Map Enemy
 
 data Bullet = Bullet deriving Show
 instance Component Bullet where type Storage Bullet = Map Bullet
@@ -73,7 +73,7 @@ makeWorld "World"
   [ ''Position
   , ''Velocity
   , ''Player
-  , ''Target
+  , ''Enemy
   , ''Bullet
   , ''Score
   , ''Time
@@ -90,14 +90,14 @@ makeWorld "World"
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
+playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
   :: Float
 playerSpeed = 170
-playerCooldown = 5
+playerBulletCooldown = 2
 playerJumpTime = 30
 jumpVelocity = 200
 gravity = 500
-bulletSpeed = 300
+bulletSpeed = 600
 enemySpeed = 80
 xmin = -100
 xmax = 100
@@ -154,14 +154,14 @@ playerShoot dT =
             _ <- newEntity
               (Bullet, pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
             spawnParticles 7 pos (dirMod 10, dirMod 100) (-80, 80)
-            cmap $ \Player -> IsShooting playerCooldown dir
+            cmap $ \Player -> IsShooting playerBulletCooldown dir
           else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
 incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
-clearTargets :: System' ()
-clearTargets = cmap $ \ent@(Target, Position (V2 x _), Velocity _) ->
+clearEnemys :: System' ()
+clearEnemys = cmap $ \ent@(Enemy, Position (V2 x _), Velocity _) ->
   if x < xmin || x > xmax then Nothing else Just ent
 
 stepParticles :: Float -> System' ()
@@ -173,12 +173,12 @@ stepBullets = cmap $ \(Bullet, Position (V2 _ py), Score s) -> if py > 170
   then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
   else Left ()
 
-handleCollisions :: System' ()
-handleCollisions = do
-  cmapM_ $ \(Target, Position posT, etyT) ->
+handleCollisions :: Float -> System' ()
+handleCollisions dT = do
+  cmapM_ $ \(Enemy, Position posT, etyT) ->
     cmapM_ $ \(Bullet, Position posB, etyB) ->
       when (norm (posT - posB) < 10) $ do
-        destroy etyT (Proxy @(Target, Kinetic))
+        destroy etyT (Proxy @(Enemy, Kinetic))
         destroy etyB (Proxy @(Bullet, Kinetic))
         spawnParticles 15 (Position posB) (-500, 500) (200, -50)
         modify global $ \(Score x) -> Score (x + hitBonus)
@@ -187,22 +187,23 @@ handleCollisions = do
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
         cmapM_
           $ \(Platform, Position (V2 xF yF), Hitbox (V2 widthF heightF) (V2 osxF osyF)) ->
-              when
-                  (  velyP
-                  <  0
-                  && (xP + widthP / 2 + osxP)
-                  >  (xF - widthF / 2 + osxF)
-                  && (xP - widthP / 2 + osxP)
-                  <= (xF + widthF / 2 + osxF)
-                  && (yP - heightP / 2 + osyP)
-                  >  (yF - heightF / 2 + osyF)
-                  && (yP - heightP / 2 + osyP)
-                  <= (yF + heightF / 2 + osyF)
-                  )
-                $  etyP
-                $= ( Position (V2 xP (yF + heightF / 2 + osyF + heightP + 1))
-                   , Velocity (V2 velxP 0)
-                   )
+              let playerBottom  = yP - heightP / 2 + osyP
+                  playerRight   = xP + widthP / 2 + osxP
+                  playerLeft    = xP - widthP / 2 + osxP
+                  platformLeft  = xF - widthF / 2 + osxF
+                  platformRight = xF + widthF / 2 + osxF
+                  platformTop   = yF + heightF / 2 + osyF
+              in  when
+                    (  (playerRight >= platformLeft)
+                    && (playerLeft <= platformRight)
+                    && (playerBottom >= platformTop)
+                    && (playerBottom + velyP * dT <= platformTop)
+                    )
+                  $  etyP
+                  $= ( Position
+                       (V2 xP (yF + heightF / 2 + osyF + heightP + 1))
+                     , Velocity (V2 velxP 0)
+                     )
 
 triggerEvery :: Float -> Float -> Float -> System' a -> System' ()
 triggerEvery dT period phase sys = do
@@ -224,17 +225,17 @@ step dT = do
   incrTime dT
   playerJump dT
   playerShoot dT
+  handleCollisions dT
   stepVelocity dT
   stepPosition dT
   clampPlayer
-  clearTargets
+  clearEnemys
   stepBullets
   stepParticles dT
-  handleCollisions
   triggerEvery dT 0.6 0
-    $ newEntity (Target, Position (V2 xmin 80), Velocity (V2 enemySpeed 0))
+    $ newEntity (Enemy, Position (V2 xmin 80), Velocity (V2 enemySpeed 0))
   triggerEvery dT 0.6 0.3 $ newEntity
-    (Target, Position (V2 xmax 120), Velocity (V2 (negate enemySpeed) 0))
+    (Enemy, Position (V2 xmax 120), Velocity (V2 (negate enemySpeed) 0))
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
@@ -302,13 +303,13 @@ draw :: System' Picture
 draw = do
   player <- foldDraw
     $ \(Player, pos) -> translate' pos . color white . scale 10 20 $ playerPic
-  targets <- foldDraw
-    $ \(Target, pos) -> translate' pos . color white . scale 10 10 $ diamond
+  enemys <- foldDraw
+    $ \(Enemy, pos) -> translate' pos . color white . scale 10 10 $ diamond
   bullets <- foldDraw
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
   platforms <- foldDraw
     $ \(Platform, pos) -> translate' pos . color white . scale 20 2 $ box
-  hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, (Position pos)) ->
+  hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
     translate' (Position $ pos + offset) . color yellow . scale w h $ box
 
   particles <- foldDraw $ \(Particle _, Velocity (V2 vx vy), pos) ->
@@ -323,11 +324,5 @@ draw = do
           $  "Score: "
           ++ show s
 
-  return
-    $  player
-    <> targets
-    <> bullets
-    <> score
-    <> particles
-    <> platforms
-    <> hitboxes
+  return $ player <> enemys <> bullets <> score <> particles <> platforms
+    -- <> hitboxes
