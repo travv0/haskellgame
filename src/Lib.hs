@@ -54,6 +54,9 @@ instance Component Hitbox where type Storage Hitbox = Map Hitbox
 data IsShooting = IsShooting Float Direction deriving Show
 instance Component IsShooting where type Storage IsShooting = Map IsShooting
 
+data CanJump = CanJump deriving Show
+instance Component CanJump where type Storage CanJump = Map CanJump
+
 newtype Keys = Keys (Set.Set Key) deriving Show
 instance Semigroup Keys where Keys s1 <> Keys s2 = Keys (s1 <> s2)
 instance Monoid Keys where mempty = Keys Set.empty
@@ -83,6 +86,7 @@ makeWorld "World"
   , ''Gravity
   , ''Keys
   , ''Jumping
+  , ''CanJump
   , ''Platform
   , ''Hitbox
   ]
@@ -123,7 +127,7 @@ initialize = do
     , Hitbox (V2 10 20) (V2 0 (-10))
     )
   _platformEty <- newEntity
-    (Platform, Position $ playerPos - V2 5 5, Hitbox (V2 20 2) 0)
+    (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 20 2) 0)
   return ()
 
 stepPosition :: Float -> System' ()
@@ -203,6 +207,7 @@ handleCollisions dT = do
                   $= ( Position
                        (V2 xP (yF + heightF / 2 + osyF + heightP + 1))
                      , Velocity (V2 velxP 0)
+                     , CanJump
                      )
 
 triggerEvery :: Float -> Float -> Float -> System' a -> System' ()
@@ -260,7 +265,7 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
-  cmap $ \(Player, Not :: Not Jumping) -> Jumping playerJumpTime
+  cmap $ \(Player, CanJump) -> (Jumping playerJumpTime, Not @CanJump)
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
   cmap $ \(Player, Jumping _) -> Not @Jumping
