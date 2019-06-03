@@ -100,11 +100,11 @@ playerSpeed = 170
 playerBulletCooldown = 2
 playerJumpTime = 30
 jumpVelocity = 200
-gravity = 500
+gravity = 750
 bulletSpeed = 600
 enemySpeed = 80
-xmin = -100
-xmax = 100
+xmin = -230
+xmax = 230
 ymin = -170
 ymax = 170
 cooldownAdjust = 100
@@ -127,7 +127,7 @@ initialize = do
     , Hitbox (V2 10 20) (V2 0 (-10))
     )
   _platformEty <- newEntity
-    (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 20 2) 0)
+    (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 400 2) 0)
   return ()
 
 stepPosition :: Float -> System' ()
@@ -316,7 +316,7 @@ draw = do
   bullets <- foldDraw
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
   platforms <- foldDraw
-    $ \(Platform, pos) -> translate' pos . color white . scale 20 2 $ box
+    $ \(Platform, pos) -> translate' pos . color white . scale 400 2 $ box
   hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
     translate' (Position $ pos + offset) . color yellow . scale w h $ box
 
