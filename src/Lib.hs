@@ -62,9 +62,9 @@ instance Component IsShooting where type Storage IsShooting = Map IsShooting
 data CanJump = CanJump deriving Show
 instance Component CanJump where type Storage CanJump = Map CanJump
 
-data BulletPatternInterval = RandomInterval Float | FixedInterval Float Float deriving Show
+data BulletPatternInterval = FixedInterval Float Float deriving Show
 
-data BulletPatternType = HomingPattern | RandomPattern (Float, Float) (Float, Float) (Float, Float) deriving Show
+data BulletPatternType = RandomPattern (Float, Float) (Float, Float) (Float, Float) deriving Show
 
 data BulletPattern = BulletPattern
   { bulletPatternInterval :: BulletPatternInterval
@@ -75,7 +75,7 @@ data BulletPattern = BulletPattern
   , bulletPatternStepTime :: Float
   } deriving Show
 
-data ShootsPatterns = ShootsPatterns (V.Vector BulletPattern) deriving Show
+newtype ShootsPatterns = ShootsPatterns (V.Vector BulletPattern) deriving Show
 instance Component ShootsPatterns where type Storage ShootsPatterns = Map ShootsPatterns
 
 newtype Keys = Keys (Set.Set Key) deriving Show
@@ -117,7 +117,7 @@ makeWorld "World"
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, enemySpeed, xmin, xmax, ymin, ymax, cooldownAdjust
+playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, xmin, xmax, ymin, ymax, cooldownAdjust, scrollSpeed
   :: Float
 playerSpeed = 170
 playerBulletCooldown = 2
@@ -125,12 +125,12 @@ playerJumpTime = 30
 jumpVelocity = 200
 gravity = 750
 bulletSpeed = 600
-enemySpeed = 80
 xmin = -230
 xmax = 230
 ymin = -170
 ymax = 170
 cooldownAdjust = 100
+scrollSpeed = 50
 
 hitBonus, missPenalty :: Int
 hitBonus = 100
@@ -153,6 +153,10 @@ initialize = do
     (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 400 2) 0)
   return ()
 
+stepScroll :: Float -> System' ()
+stepScroll dT =
+  cmap $ \(Position (V2 x y)) -> Position (V2 (x - scrollSpeed * dT) y)
+
 stepPosition :: Float -> System' ()
 stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
 
@@ -166,17 +170,20 @@ clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
 
 stepBulletPatterns :: Float -> System' ()
 stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
-  fmap ShootsPatterns
-    <$> V.forM patterns
-    $   \ptn@BulletPattern {..} -> case bulletPatternInterval of
-          RandomInterval rate              -> undefined
-          FixedInterval currTime shootTime -> if currTime >= shootTime
-            then do
-              shootPattern (Position pos) ptn
-              return ptn
-            else return ptn
-              { bulletPatternInterval = FixedInterval (currTime + 1 * dT) currTime
-              }
+  fmap ShootsPatterns <$> V.forM patterns $ \ptn@BulletPattern {..} ->
+    case bulletPatternInterval of
+      FixedInterval currTime shootTime -> if currTime >= shootTime
+        then do
+          shootPattern (Position pos) ptn
+          return ptn { bulletPatternInterval = FixedInterval 0 shootTime }
+        else return ptn
+          { bulletPatternInterval = FixedInterval (currTime + 1 * dT) shootTime
+          }
+
+stepEnemyBullets :: Float -> System' ()
+stepEnemyBullets dT = cmap $ \(EnemyBullet p t) -> if t > 0
+  then Right $ EnemyBullet p (t - 1 * dT)
+  else Left $ Not @(EnemyBullet, Kinetic)
 
 shootPattern :: Position -> BulletPattern -> System' ()
 shootPattern pos BulletPattern {..} = case bulletPatternType of
@@ -186,7 +193,6 @@ shootPattern pos BulletPattern {..} = case bulletPatternType of
     t  <- liftIO $ randomRIO dt
     newEntity
       (EnemyBullet bulletPatternBulletPicture t, pos, Velocity (V2 vx vy))
-  HomingPattern -> undefined
 
 playerJump :: Float -> System' ()
 playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
@@ -223,9 +229,12 @@ stepParticles dT = cmap $ \(Particle t) ->
   if t < 0 then Right $ Not @(Particle, Kinetic) else Left $ Particle (t - dT)
 
 stepBullets :: System' ()
-stepBullets = cmap $ \(Bullet, Position (V2 _ py), Score s) -> if py > 170
-  then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
-  else Left ()
+stepBullets = cmap $ \(Bullet, Position (V2 px py), Score s) ->
+  if (py > ymax + threshold || py < ymin - threshold)
+       || (px > xmax + threshold || px < xmin - threshold)
+    then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
+    else Left ()
+  where threshold = 20
 
 handleCollisions :: Float -> System' ()
 handleCollisions dT = do
@@ -234,7 +243,7 @@ handleCollisions dT = do
       when (norm (posT - posB) < 10) $ do
         destroy etyT (Proxy @(Enemy, Kinetic))
         destroy etyB (Proxy @(Bullet, Kinetic))
-        spawnParticles 15 (Position posB) (-200, 200) (-200, 200)
+        spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         modify global $ \(Score x) -> Score (x + hitBonus)
 
   cmapM_
@@ -284,27 +293,27 @@ step dT = do
   handleCollisions dT
   stepVelocity dT
   stepPosition dT
+  stepScroll dT
   clampPlayer
   clearEnemys
   stepBullets
+  stepEnemyBullets dT
   stepParticles dT
-  triggerEvery dT 0.6 0 $ newEntity
+  py <- liftIO $ randomRIO (ymin, ymax)
+  triggerEvery dT 3 0 $ newEntity
     ( Enemy
-    , Position (V2 xmin 80)
-    , Velocity (V2 enemySpeed 0)
+    , Position (V2 xmax py)
     , ShootsPatterns $ V.fromList
       [ BulletPattern
-          { bulletPatternInterval       = FixedInterval 5 5
+          { bulletPatternInterval       = FixedInterval 0 2
           , bulletPatternBulletPicture  = diamond
-          , bulletPatternType           = RandomPattern (3, 5) (-5, 5) (-5, 5)
-          , bulletPatternBulletsPerStep = 3
-          , bulletPatternShootTime      = 10
+          , bulletPatternType = RandomPattern (1, 5) (-200, 200) (-200, 200)
+          , bulletPatternBulletsPerStep = 20
+          , bulletPatternShootTime      = 1
           , bulletPatternStepTime       = 10
           }
       ]
     )
-  triggerEvery dT 0.6 0.3 $ newEntity
-    (Enemy, Position (V2 xmax 120), Velocity (V2 (negate enemySpeed) 0))
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
@@ -329,7 +338,8 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
-  cmap $ \(Player, CanJump) -> (Jumping playerJumpTime, Not @CanJump)
+  cmap $ \(Player)-- , CanJump
+                   -> (Jumping playerJumpTime, Not @CanJump)
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
   cmap $ \(Player, Jumping _) -> Not @Jumping
@@ -380,8 +390,8 @@ draw = do
     translate' pos . color white . scale 4 4 $ pic
   platforms <- foldDraw
     $ \(Platform, pos) -> translate' pos . color white . scale 400 2 $ box
-  hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
-    translate' (Position $ pos + offset) . color yellow . scale w h $ box
+  -- hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
+  --   translate' (Position $ pos + offset) . color yellow . scale w h $ box
 
   particles <- foldDraw $ \(Particle _, Velocity (V2 vx vy), pos) ->
     translate' pos . color white $ Line [(0, 0), (vx / 10, vy / 10)]
