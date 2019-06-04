@@ -38,7 +38,7 @@ instance Component Enemy where type Storage Enemy = Map Enemy
 data Bullet = Bullet deriving Show
 instance Component Bullet where type Storage Bullet = Map Bullet
 
-data EnemyBullet = EnemyBullet deriving Show
+data EnemyBullet = EnemyBullet Picture Float deriving Show
 instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
 
 data Platform = Platform deriving Show
@@ -62,14 +62,17 @@ instance Component IsShooting where type Storage IsShooting = Map IsShooting
 data CanJump = CanJump deriving Show
 instance Component CanJump where type Storage CanJump = Map CanJump
 
-data BulletPatternInterval = Random Float | Fixed Float Float deriving Show
+data BulletPatternInterval = RandomInterval Float | FixedInterval Float Float deriving Show
 
-data BulletPatternType = Homing | Basic deriving Show
+data BulletPatternType = HomingPattern | RandomPattern (Float, Float) (Float, Float) (Float, Float) deriving Show
 
 data BulletPattern = BulletPattern
   { bulletPatternInterval :: BulletPatternInterval
   , bulletPatternBulletPicture :: Picture
   , bulletPatternType :: BulletPatternType
+  , bulletPatternBulletsPerStep :: Int
+  , bulletPatternShootTime :: Float
+  , bulletPatternStepTime :: Float
   } deriving Show
 
 data ShootsPatterns = ShootsPatterns (V.Vector BulletPattern) deriving Show
@@ -162,14 +165,28 @@ clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
   Position (V2 (min xmax . max xmin $ x) (min ymax . max ymin $ y))
 
 stepBulletPatterns :: Float -> System' ()
-stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns) ->
-  return $ ShootsPatterns $ flip V.imap patterns $ \i ptn@BulletPattern {..} ->
-    do
-      case bulletPatternInterval of
-        Random rate    -> undefined
-        Fixed curr max -> if curr >= max
-          then undefined
-          else ptn { bulletPatternInterval = Fixed (curr + 1 * dT) max }
+stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
+  fmap ShootsPatterns
+    <$> V.forM patterns
+    $   \ptn@BulletPattern {..} -> case bulletPatternInterval of
+          RandomInterval rate              -> undefined
+          FixedInterval currTime shootTime -> if currTime >= shootTime
+            then do
+              shootPattern (Position pos) ptn
+              return ptn
+            else return ptn
+              { bulletPatternInterval = FixedInterval (currTime + 1 * dT) currTime
+              }
+
+shootPattern :: Position -> BulletPattern -> System' ()
+shootPattern pos BulletPattern {..} = case bulletPatternType of
+  RandomPattern dt dvx dvy -> replicateM_ bulletPatternBulletsPerStep $ do
+    vx <- liftIO $ randomRIO dvx
+    vy <- liftIO $ randomRIO dvy
+    t  <- liftIO $ randomRIO dt
+    newEntity
+      (EnemyBullet bulletPatternBulletPicture t, pos, Velocity (V2 vx vy))
+  HomingPattern -> undefined
 
 playerJump :: Float -> System' ()
 playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
@@ -263,6 +280,7 @@ step dT = do
   incrTime dT
   playerJump dT
   playerShoot dT
+  stepBulletPatterns dT
   handleCollisions dT
   stepVelocity dT
   stepPosition dT
@@ -270,8 +288,21 @@ step dT = do
   clearEnemys
   stepBullets
   stepParticles dT
-  triggerEvery dT 0.6 0
-    $ newEntity (Enemy, Position (V2 xmin 80), Velocity (V2 enemySpeed 0))
+  triggerEvery dT 0.6 0 $ newEntity
+    ( Enemy
+    , Position (V2 xmin 80)
+    , Velocity (V2 enemySpeed 0)
+    , ShootsPatterns $ V.fromList
+      [ BulletPattern
+          { bulletPatternInterval       = FixedInterval 5 5
+          , bulletPatternBulletPicture  = diamond
+          , bulletPatternType           = RandomPattern (3, 5) (-5, 5) (-5, 5)
+          , bulletPatternBulletsPerStep = 3
+          , bulletPatternShootTime      = 10
+          , bulletPatternStepTime       = 10
+          }
+      ]
+    )
   triggerEvery dT 0.6 0.3 $ newEntity
     (Enemy, Position (V2 xmax 120), Velocity (V2 (negate enemySpeed) 0))
 
@@ -345,6 +376,8 @@ draw = do
     $ \(Enemy, pos) -> translate' pos . color white . scale 10 10 $ diamond
   bullets <- foldDraw
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
+  enemyBullets <- foldDraw $ \(EnemyBullet pic _, pos) ->
+    translate' pos . color white . scale 4 4 $ pic
   platforms <- foldDraw
     $ \(Platform, pos) -> translate' pos . color white . scale 400 2 $ box
   hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
@@ -362,5 +395,12 @@ draw = do
           $  "Score: "
           ++ show s
 
-  return $ player <> enemys <> bullets <> score <> particles <> platforms
+  return
+    $  player
+    <> enemys
+    <> bullets
+    <> score
+    <> particles
+    <> platforms
+    <> enemyBullets
     -- <> hitboxes
