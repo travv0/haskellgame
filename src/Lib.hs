@@ -299,10 +299,10 @@ step dT = do
   stepBullets
   stepEnemyBullets dT
   stepParticles dT
-  py <- liftIO $ randomRIO (ymin, ymax)
+  enemyy <- liftIO $ randomRIO (ymin, ymax)
   triggerEvery dT 3 0 $ newEntity
     ( Enemy
-    , Position (V2 xmax py)
+    , Position (V2 xmax enemyy)
     , ShootsPatterns $ V.fromList
       [ BulletPattern
           { bulletPatternInterval       = FixedInterval 0 2
@@ -314,6 +314,10 @@ step dT = do
           }
       ]
     )
+  platformy      <- liftIO $ randomRIO (ymin, ymax - 40)
+  platformLength <- liftIO $ randomRIO (10, xmax)
+  triggerEvery dT 3 0 $ newEntity
+    (Platform, Position (V2 xmax platformy), Hitbox (V2 platformLength 2) 0)
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
@@ -388,8 +392,8 @@ draw = do
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
   enemyBullets <- foldDraw $ \(EnemyBullet pic _, pos) ->
     translate' pos . color white . scale 4 4 $ pic
-  platforms <- foldDraw
-    $ \(Platform, pos) -> translate' pos . color white . scale 400 2 $ box
+  platforms <- foldDraw $ \(Platform, pos, Hitbox (V2 w h) _) ->
+    translate' pos . color white . scale w h $ box
   -- hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
   --   translate' (Position $ pos + offset) . color yellow . scale w h $ box
 
