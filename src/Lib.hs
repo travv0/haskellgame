@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
@@ -18,6 +19,7 @@ import           Linear
 import           System.Exit
 import           System.Random
 import qualified Data.Set                      as Set
+import qualified Data.Vector                   as V
 
 data Direction = L | R deriving (Eq, Show)
 
@@ -35,6 +37,9 @@ instance Component Enemy where type Storage Enemy = Map Enemy
 
 data Bullet = Bullet deriving Show
 instance Component Bullet where type Storage Bullet = Map Bullet
+
+data EnemyBullet = EnemyBullet deriving Show
+instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
 
 data Platform = Platform deriving Show
 instance Component Platform where type Storage Platform = Map Platform
@@ -56,6 +61,19 @@ instance Component IsShooting where type Storage IsShooting = Map IsShooting
 
 data CanJump = CanJump deriving Show
 instance Component CanJump where type Storage CanJump = Map CanJump
+
+data BulletPatternInterval = Random Float | Fixed Float Float deriving Show
+
+data BulletPatternType = Homing | Basic deriving Show
+
+data BulletPattern = BulletPattern
+  { bulletPatternInterval :: BulletPatternInterval
+  , bulletPatternBulletPicture :: Picture
+  , bulletPatternType :: BulletPatternType
+  } deriving Show
+
+data ShootsPatterns = ShootsPatterns (V.Vector BulletPattern) deriving Show
+instance Component ShootsPatterns where type Storage ShootsPatterns = Map ShootsPatterns
 
 newtype Keys = Keys (Set.Set Key) deriving Show
 instance Semigroup Keys where Keys s1 <> Keys s2 = Keys (s1 <> s2)
@@ -89,6 +107,8 @@ makeWorld "World"
   , ''CanJump
   , ''Platform
   , ''Hitbox
+  , ''ShootsPatterns
+  , ''EnemyBullet
   ]
 
 type System' a = System World a
@@ -141,6 +161,16 @@ clampPlayer :: System' ()
 clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
   Position (V2 (min xmax . max xmin $ x) (min ymax . max ymin $ y))
 
+stepBulletPatterns :: Float -> System' ()
+stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns) ->
+  return $ ShootsPatterns $ flip V.imap patterns $ \i ptn@BulletPattern {..} ->
+    do
+      case bulletPatternInterval of
+        Random rate    -> undefined
+        Fixed curr max -> if curr >= max
+          then undefined
+          else ptn { bulletPatternInterval = Fixed (curr + 1 * dT) max }
+
 playerJump :: Float -> System' ()
 playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
   if jumpTime > 0
@@ -159,8 +189,8 @@ playerShoot dT =
               (Bullet, pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
             spawnParticles 7
                            pos
-                           (dirMod 10 + x * dT, dirMod 100 + x * dT)
-                           (-80 + y * dT      , 80 + y * dT)
+                           (dirMod (10 + x * dT), dirMod (100 + x * dT))
+                           (-80 + y * dT        , 80 + y * dT)
             cmap $ \Player -> IsShooting playerBulletCooldown dir
           else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
