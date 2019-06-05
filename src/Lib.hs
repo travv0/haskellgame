@@ -14,6 +14,7 @@ module Lib where
 import           Apecs
 import           Apecs.Gloss
 import           Control.Monad
+import           Data.Char
 import           Data.Semigroup                 ( Semigroup )
 import           Linear
 import           System.Exit
@@ -83,7 +84,7 @@ instance Semigroup Keys where Keys s1 <> Keys s2 = Keys (s1 <> s2)
 instance Monoid Keys where mempty = Keys Set.empty
 instance Component Keys where type Storage Keys = Global Keys
 
-newtype Score = Score Int deriving (Show, Num)
+newtype Score = Score Float deriving (Show, Num)
 instance Semigroup Score where (<>) = (+)
 instance Monoid Score where mempty = 0
 instance Component Score where type Storage Score = Global Score
@@ -117,7 +118,7 @@ makeWorld "World"
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, xmin, xmax, ymin, ymax, cooldownAdjust, scrollSpeed
+playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, xmin, xmax, ymin, ymax, cooldownAdjust, scrollSpeed, scoreTimeMod
   :: Float
 playerSpeed = 170
 playerBulletCooldown = 2
@@ -131,10 +132,10 @@ ymin = -170
 ymax = 170
 cooldownAdjust = 100
 scrollSpeed = 50
+scoreTimeMod = 10
 
-hitBonus, missPenalty :: Int
+hitBonus :: Int
 hitBonus = 100
-missPenalty = 40
 
 playerPos, scorePos :: V2 Float
 playerPos = V2 0 (-120)
@@ -220,6 +221,9 @@ playerShoot dT =
 incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
+scoreStep :: Float -> System' ()
+scoreStep dT = modify global $ \(Score s) -> Score (s + dT * scoreTimeMod)
+
 clearEnemys :: System' ()
 clearEnemys = cmap $ \ent@(Enemy, Position (V2 x _), Velocity _) ->
   if x < xmin || x > xmax then Nothing else Just ent
@@ -229,10 +233,10 @@ stepParticles dT = cmap $ \(Particle t) ->
   if t < 0 then Right $ Not @(Particle, Kinetic) else Left $ Particle (t - dT)
 
 stepBullets :: System' ()
-stepBullets = cmap $ \(Bullet, Position (V2 px py), Score s) ->
+stepBullets = cmap $ \(Bullet, Position (V2 px py)) ->
   if (py > ymax + threshold || py < ymin - threshold)
        || (px > xmax + threshold || px < xmin - threshold)
-    then Right (Not @(Bullet, Kinetic), Score (s - missPenalty))
+    then Right (Not @(Bullet, Kinetic))
     else Left ()
   where threshold = 20
 
@@ -244,12 +248,12 @@ handleCollisions dT = do
         destroy etyT (Proxy @(Enemy, Kinetic))
         destroy etyB (Proxy @(Bullet, Kinetic))
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
-        modify global $ \(Score x) -> Score (x + hitBonus)
+        modify global $ \(Score x) -> Score (x + fromIntegral hitBonus)
 
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
         cmapM_
-          $ \(Platform, Position (V2 xF yF), Hitbox (V2 widthF heightF) (V2 osxF osyF)) ->
+          $ \(Platform, Position (V2 xF yF), Hitbox (V2 widthF heightF) (V2 osxF osyF), Keys keys) ->
               let playerBottom  = yP - heightP / 2 + osyP
                   playerRight   = xP + widthP / 2 + osxP
                   playerLeft    = xP - widthP / 2 + osxP
@@ -261,6 +265,7 @@ handleCollisions dT = do
                     && (playerLeft <= platformRight)
                     && (playerBottom >= platformTop)
                     && (playerBottom + velyP * dT <= platformTop)
+                    && not (Set.member (SpecialKey KeyDown) keys)
                     )
                   $  etyP
                   $= ( Position
@@ -287,6 +292,7 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 step :: Float -> System' ()
 step dT = do
   incrTime dT
+  scoreStep dT
   playerJump dT
   playerShoot dT
   stepBulletPatterns dT
@@ -299,15 +305,21 @@ step dT = do
   stepBullets
   stepEnemyBullets dT
   stepParticles dT
-  enemyy <- liftIO $ randomRIO (ymin, ymax)
-  triggerEvery dT 3 0 $ newEntity
+  enemyy               <- liftIO $ randomRIO (ymin, ymax)
+  enemyRate            <- liftIO $ randomRIO (1 :: Float, 5)
+  enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
+  enemyInterval        <- liftIO $ randomRIO (0 :: Float, 5)
+  enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
+  triggerEvery dT enemyRate 0 $ newEntity
     ( Enemy
     , Position (V2 xmax enemyy)
+    , Velocity (V2 enemyVel 0)
     , ShootsPatterns $ V.fromList
       [ BulletPattern
-          { bulletPatternInterval       = FixedInterval 0 2
+          { bulletPatternInterval       = FixedInterval enemyInitialInterval
+                                                        enemyInterval
           , bulletPatternBulletPicture  = diamond
-          , bulletPatternType = RandomPattern (1, 5) (-200, 200) (-200, 200)
+          , bulletPatternType = RandomPattern (1, 5) (-100, 100) (-100, 100)
           , bulletPatternBulletsPerStep = 20
           , bulletPatternShootTime      = 1
           , bulletPatternStepTime       = 10
@@ -321,12 +333,17 @@ step dT = do
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
-  modify global $ \(Keys keys) -> Keys $ Set.insert k keys
+  modify global $ \(Keys keys) -> Keys $ Set.insert (normalizeInput k) keys
   return event
 handleInput event@(EventKey k Up _ _) = do
-  modify global $ \(Keys keys) -> Keys $ Set.delete k keys
+  modify global $ \(Keys keys) -> Keys $ Set.delete (normalizeInput k) keys
   return event
 handleInput event = return event
+
+normalizeInput :: Key -> Key
+normalizeInput k = case k of
+  Char c -> Char $ toLower c
+  key    -> key
 
 handleEvent :: Event -> System' ()
 handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) =
@@ -342,35 +359,31 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
-  cmap $ \(Player)-- , CanJump
-                   -> (Jumping playerJumpTime, Not @CanJump)
+  cmap $ \(Player, CanJump) -> (Jumping playerJumpTime, Not @CanJump)
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
   cmap $ \(Player, Jumping _) -> Not @Jumping
 
-handleEvent (EventKey (Char 'x') Down _ _) = do
-  cmap $ \Player -> IsShooting 0 R
-  cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
+handleEvent (EventKey c Down _ _) = case normalizeInput c of
+  Char 'x' -> do
+    cmap $ \Player -> IsShooting 0 R
+    cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
+  Char 'z' -> do
+    cmap $ \Player -> IsShooting 0 L
+    cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
+  SpecialKey KeyEsc -> liftIO exitSuccess
+  _                 -> return ()
 
-handleEvent (EventKey (Char 'x') Up _ _) =
-  cmapM_
-    $ \(Player, IsShooting timeout _, Keys keys, e) ->
-        if Set.member (Char 'z') keys
-          then set e (IsShooting timeout L)
-          else destroy e (Proxy @IsShooting)
-
-handleEvent (EventKey (Char 'z') Down _ _) = do
-  cmap $ \Player -> IsShooting 0 L
-  cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
-
-handleEvent (EventKey (Char 'z') Up _ _) =
-  cmapM_
-    $ \(Player, IsShooting timeout _, Keys keys, e) ->
-        if Set.member (Char 'x') keys
-          then set e (IsShooting timeout R)
-          else destroy e (Proxy @IsShooting)
-
-handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
+handleEvent (EventKey c Up _ _) = case normalizeInput c of
+  Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'z')) keys
+      then set e (IsShooting timeout L)
+      else destroy e (Proxy @IsShooting)
+  Char 'z' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'x')) keys
+      then set e (IsShooting timeout R)
+      else destroy e (Proxy @IsShooting)
+  _ -> return ()
 
 handleEvent _ = return ()
 
@@ -407,7 +420,7 @@ draw = do
           .  scale 0.1 0.1
           .  Text
           $  "Score: "
-          ++ show s
+          ++ show (round s :: Integer)
 
   return
     $  player
