@@ -253,7 +253,7 @@ handleCollisions dT = do
         destroy etyT (Proxy @(Enemy, Kinetic))
         destroy etyB (Proxy @(Bullet, Kinetic))
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
-        modify global $ \(Score x) -> Score (x + fromIntegral hitBonus)
+        global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
   cmapM_ $ \(Player, Position posP, etyP) ->
     cmapM_ $ \(EnemyBullet _ _, Position posE) -> if norm (posP - posE) < 40
@@ -301,26 +301,12 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
   t  <- liftIO $ randomRIO (0.02, 0.3)
   newEntity (Particle t, pos, Velocity (V2 vx vy))
 
-step :: Float -> System' ()
-step dT = do
-  incrTime dT
-  scoreStep dT
-  playerJump dT
-  playerShoot dT
-  stepBulletPatterns dT
-  handleCollisions dT
-  stepVelocity dT
-  stepPosition dT
-  stepScroll dT
-  clampPlayer
-  clearEnemys
-  stepBullets
-  stepEnemyBullets dT
-  stepParticles dT
+spawnEnemies :: Float -> System' ()
+spawnEnemies dT = do
   enemyy               <- liftIO $ randomRIO (ymin, ymax)
   enemyRate            <- liftIO $ randomRIO (1 :: Float, 3)
   enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
-  enemyInterval        <- liftIO $ randomRIO (0 :: Float, 5)
+  enemyInterval        <- liftIO $ randomRIO (1 :: Float, 5)
   enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
   triggerEvery dT enemyRate 0 $ newEntity
     ( Enemy
@@ -338,17 +324,39 @@ step dT = do
           }
       ]
     )
+
+spawnPlatforms :: Float -> System' ()
+spawnPlatforms dT = do
   platformy      <- liftIO $ randomRIO (ymin, ymax - 40)
   platformLength <- liftIO $ randomRIO (10, xmax)
   triggerEvery dT 3 0 $ newEntity
     (Platform, Position (V2 xmax platformy), Hitbox (V2 platformLength 2) 0)
 
+step :: Float -> System' ()
+step dT = do
+  incrTime dT
+  scoreStep dT
+  playerJump dT
+  playerShoot dT
+  stepBulletPatterns dT
+  handleCollisions dT
+  stepVelocity dT
+  stepPosition dT
+  stepScroll dT
+  clampPlayer
+  clearEnemys
+  stepBullets
+  stepEnemyBullets dT
+  stepParticles dT
+  spawnEnemies dT
+  spawnPlatforms dT
+
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
-  modify global $ \(Keys keys) -> Keys $ Set.insert (normalizeInput k) keys
+  global $~ \(Keys keys) -> Keys $ Set.insert (normalizeInput k) keys
   return event
 handleInput event@(EventKey k Up _ _) = do
-  modify global $ \(Keys keys) -> Keys $ Set.delete (normalizeInput k) keys
+  global $~ \(Keys keys) -> Keys $ Set.delete (normalizeInput k) keys
   return event
 handleInput event = return event
 
@@ -390,15 +398,16 @@ handleEvent (EventKey (SpecialKey KeyDown) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
     Velocity (V2 x (y + playerSpeed))
 
-handleEvent (EventKey c Down _ _) = case normalizeInput c of
+handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
+
+handleEvent (EventKey c                   Down _ _) = case normalizeInput c of
   Char 'x' -> do
     cmap $ \Player -> IsShooting 0 R
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
   Char 'z' -> do
     cmap $ \Player -> IsShooting 0 L
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
-  SpecialKey KeyEsc -> liftIO exitSuccess
-  _                 -> return ()
+  _ -> return ()
 
 handleEvent (EventKey c Up _ _) = case normalizeInput c of
   Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
