@@ -255,11 +255,16 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
-  cmapM_ $ \(Player, Position posP, etyP) ->
-    cmapM_
-      $ \(EnemyBullet _ _, Position posE) -> when (norm (posP - posE) < 40) $ do
-          spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
-          etyP $= DangerZone
+  cmapM_ $ \(Player, Position posP, etyP) -> do
+    canDangerZone <-
+      flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
+        acc || (norm (posP - posE) < 40)
+    isDangerZone <- exists etyP $ Proxy @DangerZone
+    if canDangerZone && not isDangerZone
+      then do
+        spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
+        etyP $= DangerZone
+      else etyP $= Not @DangerZone
 
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
