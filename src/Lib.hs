@@ -39,6 +39,9 @@ instance Component Enemy where type Storage Enemy = Map Enemy
 data Bullet = Bullet deriving Show
 instance Component Bullet where type Storage Bullet = Map Bullet
 
+data DangerZone = DangerZone deriving Show
+instance Component DangerZone where type Storage DangerZone = Map DangerZone
+
 data EnemyBullet = EnemyBullet Picture Float deriving Show
 instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
 
@@ -113,6 +116,7 @@ makeWorld "World"
   , ''Hitbox
   , ''ShootsPatterns
   , ''EnemyBullet
+  , ''DangerZone
   ]
 
 type System' a = System World a
@@ -163,7 +167,8 @@ stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
 
 stepVelocity :: Float -> System' ()
 stepVelocity dT =
-  cmap $ \(Velocity (V2 x y), Gravity g) -> Velocity (V2 x (y - dT * g))
+  cmap $ \(Velocity (V2 x y), Gravity g, Not :: Not DangerZone) ->
+    Velocity (V2 x (y - dT * g))
 
 clampPlayer :: System' ()
 clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
@@ -250,6 +255,13 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         modify global $ \(Score x) -> Score (x + fromIntegral hitBonus)
 
+  cmapM_ $ \(Player, Position posP, etyP) ->
+    cmapM_ $ \(EnemyBullet _ _, Position posE) -> if norm (posP - posE) < 40
+      then do
+        spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
+        etyP $= DangerZone
+      else etyP $= Not @DangerZone
+
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
         cmapM_
@@ -306,7 +318,7 @@ step dT = do
   stepEnemyBullets dT
   stepParticles dT
   enemyy               <- liftIO $ randomRIO (ymin, ymax)
-  enemyRate            <- liftIO $ randomRIO (1 :: Float, 5)
+  enemyRate            <- liftIO $ randomRIO (1 :: Float, 3)
   enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
   enemyInterval        <- liftIO $ randomRIO (0 :: Float, 5)
   enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
@@ -358,11 +370,25 @@ handleEvent (EventKey (SpecialKey KeyRight) Down _ _) =
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
 
-handleEvent (EventKey (SpecialKey KeyUp) Down _ _) =
-  cmap $ \(Player, CanJump) -> (Jumping playerJumpTime, Not @CanJump)
+handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = do
+  cmap $ \(Player, CanJump, Not :: Not DangerZone) ->
+    (Jumping playerJumpTime, Not @CanJump)
+  cmapM $ \(Player, Velocity (V2 x y), DangerZone) -> do
+    liftIO $ print y
+    return $ Velocity (V2 x (y + playerSpeed))
 
-handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
+handleEvent (EventKey (SpecialKey KeyUp) Up _ _) = do
   cmap $ \(Player, Jumping _) -> Not @Jumping
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 x (y - playerSpeed))
+
+handleEvent (EventKey (SpecialKey KeyDown) Down _ _) =
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 x (y - playerSpeed))
+
+handleEvent (EventKey (SpecialKey KeyDown) Up _ _) =
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 x (y + playerSpeed))
 
 handleEvent (EventKey c Down _ _) = case normalizeInput c of
   Char 'x' -> do
