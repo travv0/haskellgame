@@ -258,9 +258,9 @@ handleCollisions dT = do
   cmapM_ $ \(Player, Position posP, etyP) -> do
     canDangerZone <-
       flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
-        acc || (norm (posP - posE) < 40)
+        acc || (norm (posP - posE) < 100)
     isDangerZone <- exists etyP $ Proxy @DangerZone
-    if canDangerZone && not isDangerZone
+    if canDangerZone || (canDangerZone && not isDangerZone)
       then do
         spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
         etyP $= DangerZone
@@ -343,9 +343,9 @@ step dT = do
   playerJump dT
   playerShoot dT
   stepBulletPatterns dT
-  handleCollisions dT
   stepVelocity dT
   stepPosition dT
+  handleCollisions dT
   stepScroll dT
   clampPlayer
   clearEnemys
@@ -387,7 +387,7 @@ handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = do
     (Jumping playerJumpTime, Not @CanJump)
   cmapM $ \(Player, Velocity (V2 x y), DangerZone) -> do
     liftIO $ print y
-    return $ Velocity (V2 x (y + playerSpeed))
+    return $ Velocity (V2 x playerSpeed)
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) = do
   cmap $ \(Player, Jumping _) -> Not @Jumping
