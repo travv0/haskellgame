@@ -255,7 +255,7 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
-  cmapM_ $ \(Player, Position posP, etyP) -> do
+  cmapM_ $ \(Player, Position posP, etyP, Keys keys) -> do
     canDangerZone <-
       flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
         acc || (norm (posP - posE) < 100)
@@ -263,7 +263,9 @@ handleCollisions dT = do
     if canDangerZone || (canDangerZone && not isDangerZone)
       then do
         spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
-        etyP $= DangerZone
+        if Set.member (Char 'z') keys
+          then etyP $= DangerZone
+          else etyP $= Not @DangerZone
       else etyP $= Not @DangerZone
 
   cmapM_
@@ -370,56 +372,61 @@ normalizeInput k = case k of
   key    -> key
 
 handleEvent :: Event -> System' ()
-handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
+handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) = do
+  cmap $ \(Player, Velocity (V2 x y), Not :: Not DangerZone) ->
+    Velocity (V2 (x - playerSpeed) y)
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 (x - playerSpeed / 2) y)
 
 handleEvent (EventKey (SpecialKey KeyLeft) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x + playerSpeed) y)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 0 y)
 
-handleEvent (EventKey (SpecialKey KeyRight) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x + playerSpeed) y)
+handleEvent (EventKey (SpecialKey KeyRight) Down _ _) = do
+  cmap $ \(Player, Velocity (V2 x y), Not :: Not DangerZone) ->
+    Velocity (V2 (x + playerSpeed) y)
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 (x + playerSpeed / 2) y)
 
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 (x - playerSpeed) y)
+  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 0 y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = do
   cmap $ \(Player, CanJump, Not :: Not DangerZone) ->
     (Jumping playerJumpTime, Not @CanJump)
-  cmapM $ \(Player, Velocity (V2 x y), DangerZone) -> do
-    liftIO $ print y
-    return $ Velocity (V2 x playerSpeed)
+  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+    Velocity (V2 x (playerSpeed / 2))
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) = do
   cmap $ \(Player, Jumping _) -> Not @Jumping
   cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y - playerSpeed))
+    Velocity (V2 x (y - playerSpeed / 2))
 
 handleEvent (EventKey (SpecialKey KeyDown) Down _ _) =
   cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y - playerSpeed))
+    Velocity (V2 x (y - playerSpeed / 2))
 
 handleEvent (EventKey (SpecialKey KeyDown) Up _ _) =
   cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y + playerSpeed))
+    Velocity (V2 x (y + playerSpeed / 2))
 
 handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
 
 handleEvent (EventKey c                   Down _ _) = case normalizeInput c of
-  Char 'x' -> do
+  Char 'c' -> do
     cmap $ \Player -> IsShooting 0 R
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
-  Char 'z' -> do
+  Char 'x' -> do
     cmap $ \Player -> IsShooting 0 L
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
   _ -> return ()
 
 handleEvent (EventKey c Up _ _) = case normalizeInput c of
-  Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
-    if Set.member (normalizeInput (Char 'z')) keys
+  Char 'c' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'x')) keys
       then set e (IsShooting timeout L)
       else destroy e (Proxy @IsShooting)
-  Char 'z' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
-    if Set.member (normalizeInput (Char 'x')) keys
+  Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'c')) keys
       then set e (IsShooting timeout R)
       else destroy e (Proxy @IsShooting)
   _ -> return ()
