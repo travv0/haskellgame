@@ -255,18 +255,21 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
-  cmapM_ $ \(Player, Position posP, etyP, Keys keys) -> do
+  cmapM_ $ \(Player, Position posP, etyP, Keys keys, Velocity velP) -> do
     canDangerZone <-
       flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
         acc || (norm (posP - posE) < 100)
     isDangerZone <- exists etyP $ Proxy @DangerZone
+    let leaveDangerZone = when isDangerZone $ do
+          etyP $= Not @DangerZone
+          etyP $= Velocity (velP * 2)
     if canDangerZone || (canDangerZone && not isDangerZone)
       then do
         spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
         if Set.member (Char 'z') keys
           then etyP $= DangerZone
-          else etyP $= Not @DangerZone
-      else etyP $= Not @DangerZone
+          else leaveDangerZone
+      else leaveDangerZone
 
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
