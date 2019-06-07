@@ -92,6 +92,11 @@ instance Semigroup Score where (<>) = (+)
 instance Monoid Score where mempty = 0
 instance Component Score where type Storage Score = Global Score
 
+newtype HighScore = HighScore Float deriving (Show, Num)
+instance Semigroup HighScore where (<>) = (+)
+instance Monoid HighScore where mempty = 0
+instance Component HighScore where type Storage HighScore = Global HighScore
+
 newtype Time = Time Float deriving (Show, Num)
 instance Semigroup Time where (<>) = (+)
 instance Monoid Time where mempty = 0
@@ -104,9 +109,10 @@ makeWorld "World"
   , ''Enemy
   , ''Bullet
   , ''Score
+  , ''HighScore
+  , ''Camera
   , ''Time
   , ''Particle
-  , ''Camera
   , ''IsShooting
   , ''Gravity
   , ''Keys
@@ -141,9 +147,10 @@ scoreTimeMod = 10
 hitBonus :: Int
 hitBonus = 100
 
-playerPos, scorePos :: V2 Float
+playerPos, scorePos, highScorePos :: V2 Float
 playerPos = V2 0 (-120)
 scorePos = V2 xmin (-170)
+highScorePos = V2 xmin 165
 
 initialize :: System' ()
 initialize = do
@@ -158,6 +165,30 @@ initialize = do
     (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 400 2) 0)
   return ()
 
+resetGame :: System' ()
+resetGame = do
+  global $~ \(Score score, HighScore _) -> (Score 0, HighScore score)
+  cmapM_ $ \(Player, ety) ->
+    destroy ety
+      $ Proxy
+        @( Player
+        , Kinetic
+        , IsShooting
+        , Gravity
+        , Jumping
+        , CanJump
+        , Hitbox
+        , DangerZone
+        )
+  cmapM_
+    $ \(Enemy, ety) -> destroy ety $ Proxy @(Enemy, Kinetic, ShootsPatterns)
+  cmapM_ $ \(Bullet, ety) -> destroy ety $ Proxy @(Bullet, Kinetic)
+  cmapM_ $ \(EnemyBullet _ _, ety) -> do
+    entityExists <- exists ety $ Proxy @(EnemyBullet, Kinetic)
+    when entityExists $ destroy ety $ Proxy @(EnemyBullet, Kinetic)
+  cmapM_ $ \(Platform, ety) -> destroy ety $ Proxy @(Platform, Kinetic)
+  initialize
+
 stepScroll :: Float -> System' ()
 stepScroll dT =
   cmap $ \(Position (V2 x y)) -> Position (V2 (x - scrollSpeed * dT) y)
@@ -171,8 +202,10 @@ stepVelocity dT =
     Velocity (V2 x (y - dT * g))
 
 clampPlayer :: System' ()
-clampPlayer = cmap $ \(Player, Position (V2 x y)) ->
-  Position (V2 (min xmax . max xmin $ x) (min ymax . max ymin $ y))
+clampPlayer =
+  cmapM $ \(Player, Position (V2 x y), ety) -> if x < xmin - 10 || y < ymin - 20
+    then resetGame
+    else ety $= Position (V2 (min xmax x) (min ymax y))
 
 stepBulletPatterns :: Float -> System' ()
 stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
@@ -295,6 +328,10 @@ handleCollisions dT = do
                      , CanJump
                      )
 
+  cmapM_
+    $ \(Player, Position posP) -> cmapM_ $ \(EnemyBullet _ t, Position posB) ->
+        when (t > dT * 2 && norm (posP - posB) < 6) resetGame
+
 triggerEvery :: Float -> Float -> Float -> System' a -> System' ()
 triggerEvery dT period phase sys = do
   Time t <- get global
@@ -382,7 +419,7 @@ handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) = do
     Velocity (V2 (x - playerSpeed / 2) y)
 
 handleEvent (EventKey (SpecialKey KeyLeft) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 0 y)
+  cmap $ \(Player, Velocity (V2 _ y)) -> Velocity (V2 0 y)
 
 handleEvent (EventKey (SpecialKey KeyRight) Down _ _) = do
   cmap $ \(Player, Velocity (V2 x y), Not :: Not DangerZone) ->
@@ -391,12 +428,12 @@ handleEvent (EventKey (SpecialKey KeyRight) Down _ _) = do
     Velocity (V2 (x + playerSpeed / 2) y)
 
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x y)) -> Velocity (V2 0 y)
+  cmap $ \(Player, Velocity (V2 _ y)) -> Velocity (V2 0 y)
 
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = do
   cmap $ \(Player, CanJump, Not :: Not DangerZone) ->
     (Jumping playerJumpTime, Not @CanJump)
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
+  cmap $ \(Player, Velocity (V2 x _), DangerZone) ->
     Velocity (V2 x (playerSpeed / 2))
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) = do
@@ -471,11 +508,21 @@ draw = do
           $  "Score: "
           ++ show (round s :: Integer)
 
+  HighScore hs <- get global
+  let highScore =
+        color white
+          .  translate' (Position highScorePos)
+          .  scale 0.1 0.1
+          .  Text
+          $  "High Score: "
+          ++ show (round hs :: Integer)
+
   return
     $  player
     <> enemys
     <> bullets
     <> score
+    <> highScore
     <> particles
     <> platforms
     <> enemyBullets
