@@ -167,7 +167,7 @@ initialize = do
 
 resetGame :: System' ()
 resetGame = do
-  global $~ \(Score score, HighScore _) -> (Score 0, HighScore score)
+  global $~ \(Score _) -> Score 0
   cmapM_ $ \(Player, ety) ->
     destroy ety
       $ Proxy
@@ -183,9 +183,9 @@ resetGame = do
   cmapM_
     $ \(Enemy, ety) -> destroy ety $ Proxy @(Enemy, Kinetic, ShootsPatterns)
   cmapM_ $ \(Bullet, ety) -> destroy ety $ Proxy @(Bullet, Kinetic)
-  cmapM_ $ \(EnemyBullet _ _, ety) -> do
-    entityExists <- exists ety $ Proxy @(EnemyBullet, Kinetic)
-    when entityExists $ destroy ety $ Proxy @(EnemyBullet, Kinetic)
+  -- cmapM_ $ \(EnemyBullet _ _, ety) -> do
+  --   entityExists <- exists ety $ Proxy @(EnemyBullet, Kinetic)
+  --   when entityExists $ destroy ety $ Proxy @(EnemyBullet, Kinetic)
   cmapM_ $ \(Platform, ety) -> destroy ety $ Proxy @(Platform, Kinetic)
   initialize
 
@@ -260,7 +260,8 @@ incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
 scoreStep :: Float -> System' ()
-scoreStep dT = modify global $ \(Score s) -> Score (s + dT * scoreTimeMod)
+scoreStep dT = modify global $ \(Score s, HighScore hs) ->
+  (Score (s + dT * scoreTimeMod), HighScore (if s > hs then s else hs))
 
 clearEnemys :: System' ()
 clearEnemys = cmap $ \ent@(Enemy, Position (V2 x _), Velocity _) ->
