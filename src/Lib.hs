@@ -260,8 +260,13 @@ incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
 scoreStep :: Float -> System' ()
-scoreStep dT = modify global $ \(Score s, HighScore hs) ->
-  (Score (s + dT * scoreTimeMod), HighScore (if s > hs then s else hs))
+scoreStep dT = cmapM $ \Player -> do
+  canDZ <- canDangerZone
+  let scoreBonus = if canDZ then 2 else 1
+  modify global $ \(Score s, HighScore hs) ->
+    ( Score (s + dT * scoreTimeMod * scoreBonus)
+    , HighScore (if s > hs then s else hs)
+    )
 
 clearEnemys :: System' ()
 clearEnemys = cmap $ \ent@(Enemy, Position (V2 x _), Velocity _) ->
@@ -279,6 +284,15 @@ stepBullets = cmap $ \(Bullet, Position (V2 px py)) ->
     else Left ()
   where threshold = 20
 
+canDangerZone :: System' Bool
+canDangerZone = flip cfoldM False $ \acc (Player, Position posP) -> do
+  inDZ <- cfold
+    (\innerAcc (EnemyBullet _ _, Position posE) ->
+      innerAcc || (norm (posP - posE) < 100)
+    )
+    False
+  return $ acc || inDZ
+
 handleCollisions :: Float -> System' ()
 handleCollisions dT = do
   cmapM_ $ \(Enemy, Position posT, etyT) ->
@@ -290,14 +304,13 @@ handleCollisions dT = do
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
   cmapM_ $ \(Player, Position posP, etyP, Keys keys, Velocity velP) -> do
-    canDangerZone <-
-      flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
-        acc || (norm (posP - posE) < 100)
+    canDZ <- flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
+      acc || (norm (posP - posE) < 100)
     isDangerZone <- exists etyP $ Proxy @DangerZone
     let leaveDangerZone = when isDangerZone $ do
           etyP $= Not @DangerZone
           etyP $= Velocity (velP * 2)
-    if canDangerZone || (canDangerZone && not isDangerZone)
+    if canDZ || (canDZ && not isDangerZone)
       then do
         spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
         if Set.member (Char 'z') keys
