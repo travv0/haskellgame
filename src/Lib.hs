@@ -1,13 +1,13 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Lib where
 
@@ -185,9 +185,8 @@ resetGame = do
   cmapM_
     $ \(Enemy, ety) -> destroy ety $ Proxy @(Enemy, Kinetic, ShootsPatterns)
   cmapM_ $ \(Bullet, ety) -> destroy ety $ Proxy @(Bullet, Kinetic)
-  -- cmapM_ $ \(EnemyBullet _ _, ety) -> do
-  --   entityExists <- exists ety $ Proxy @(EnemyBullet, Kinetic)
-  --   when entityExists $ destroy ety $ Proxy @(EnemyBullet, Kinetic)
+  cmapM_
+    $ \(EnemyBullet _ _, ety) -> destroy ety $ Proxy @(EnemyBullet, Kinetic)
   cmapM_ $ \(Platform, ety) -> destroy ety $ Proxy @(Platform, Kinetic)
   initialize
 
@@ -258,7 +257,6 @@ playerShoot :: Float -> System' ()
 playerShoot dT =
   cmapM_
     $ \(Player, pos, Velocity (V2 x y), IsShooting cooldown dir) ->
-
         if cooldown <= 0
           then do
             let dirMod = if dir == L then negate else id
@@ -357,9 +355,18 @@ handleCollisions dT = do
                      , CanJump
                      )
 
-  cmapM_
-    $ \(Player, Position posP) -> cmapM_ $ \(EnemyBullet _ t, Position posB) ->
-        when (t > dT * 2 && norm (posP - posB) < 6) resetGame
+  reset <- cfoldM
+    (\acc (Player, Position posP) -> do
+      r <- cfold
+        (\innerAcc (EnemyBullet _ t, Position posB) ->
+          innerAcc || t > dT * 2 && norm (posP - posB) < 6
+        )
+        False
+      return $ acc || r
+    )
+    False
+
+  when reset resetGame
 
 triggerEvery :: Float -> Float -> Float -> System' a -> System' ()
 triggerEvery dT period phase sys = do
