@@ -70,13 +70,15 @@ data BulletPatternInterval = FixedInterval Float Float deriving Show
 
 data BulletPatternType = RandomPattern (Float, Float) (Float, Float) (Float, Float) deriving Show
 
+data BulletPatternShootTimes = ShootTimes Float Float deriving Show
+
 data BulletPattern = BulletPattern
   { bulletPatternInterval :: BulletPatternInterval
   , bulletPatternBulletPicture :: Picture
   , bulletPatternType :: BulletPatternType
   , bulletPatternBulletsPerStep :: Int
   , bulletPatternShootTime :: Float
-  , bulletPatternStepTime :: Float
+  , bulletPatternShootTimes :: BulletPatternShootTimes
   } deriving Show
 
 newtype ShootsPatterns = ShootsPatterns (V.Vector BulletPattern) deriving Show
@@ -212,9 +214,21 @@ stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
   fmap ShootsPatterns <$> V.forM patterns $ \ptn@BulletPattern {..} ->
     case bulletPatternInterval of
       FixedInterval currTime shootTime -> if currTime >= shootTime
-        then do
-          shootPattern (Position pos) ptn
-          return ptn { bulletPatternInterval = FixedInterval 0 shootTime }
+        then
+          let ShootTimes curr final = bulletPatternShootTimes
+          in
+            if curr < final
+              then do
+                shootPattern (Position pos) ptn
+                return ptn
+                  { bulletPatternInterval   =
+                    FixedInterval (shootTime - bulletPatternShootTime) shootTime
+                  , bulletPatternShootTimes = ShootTimes (curr + 1) final
+                  }
+              else return ptn
+                { bulletPatternInterval   = FixedInterval 0 shootTime
+                , bulletPatternShootTimes = ShootTimes 0 final
+                }
         else return ptn
           { bulletPatternInterval = FixedInterval (currTime + 1 * dT) shootTime
           }
@@ -244,6 +258,7 @@ playerShoot :: Float -> System' ()
 playerShoot dT =
   cmapM_
     $ \(Player, pos, Velocity (V2 x y), IsShooting cooldown dir) ->
+
         if cooldown <= 0
           then do
             let dirMod = if dir == L then negate else id
@@ -378,9 +393,9 @@ spawnEnemies dT = do
                                                         enemyInterval
           , bulletPatternBulletPicture  = diamond
           , bulletPatternType = RandomPattern (1, 5) (-100, 100) (-100, 100)
-          , bulletPatternBulletsPerStep = 20
-          , bulletPatternShootTime      = 1
-          , bulletPatternStepTime       = 10
+          , bulletPatternBulletsPerStep = 3
+          , bulletPatternShootTime      = 0.2
+          , bulletPatternShootTimes     = ShootTimes 0 5
           }
       ]
     )
