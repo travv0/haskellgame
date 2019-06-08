@@ -40,7 +40,7 @@ data Bullet = Bullet deriving Show
 instance Component Bullet where type Storage Bullet = Map Bullet
 
 data DangerZone = DangerZone deriving Show
-instance Component DangerZone where type Storage DangerZone = Map DangerZone
+instance Component DangerZone where type Storage DangerZone = Unique DangerZone
 
 data EnemyBullet = EnemyBullet Picture Float deriving Show
 instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
@@ -54,17 +54,26 @@ instance Component Particle where type Storage Particle = Map Particle
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
+data MovingUp = MovingUp deriving Show
+instance Component MovingUp where type Storage MovingUp = Unique MovingUp
+data MovingRight = MovingRight deriving Show
+instance Component MovingRight where type Storage MovingRight = Unique MovingRight
+data MovingDown = MovingDown deriving Show
+instance Component MovingDown where type Storage MovingDown = Unique MovingDown
+data MovingLeft = MovingLeft deriving Show
+instance Component MovingLeft where type Storage MovingLeft = Unique MovingLeft
+
 newtype Jumping = Jumping Float deriving Show
-instance Component Jumping where type Storage Jumping = Map Jumping
+instance Component Jumping where type Storage Jumping = Unique Jumping
 
 data Hitbox = Hitbox (V2 Float) (V2 Float) deriving Show
 instance Component Hitbox where type Storage Hitbox = Map Hitbox
 
 data IsShooting = IsShooting Float Direction deriving Show
-instance Component IsShooting where type Storage IsShooting = Map IsShooting
+instance Component IsShooting where type Storage IsShooting = Unique IsShooting
 
 data CanJump = CanJump deriving Show
-instance Component CanJump where type Storage CanJump = Map CanJump
+instance Component CanJump where type Storage CanJump = Unique CanJump
 
 data BulletPatternInterval = FixedInterval Float Float deriving Show
 
@@ -125,6 +134,10 @@ makeWorld "World"
   , ''ShootsPatterns
   , ''EnemyBullet
   , ''DangerZone
+  , ''MovingUp
+  , ''MovingRight
+  , ''MovingDown
+  , ''MovingLeft
   ]
 
 type System' a = System World a
@@ -334,26 +347,28 @@ handleCollisions dT = do
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
         cmapM_
-          $ \(Platform, Position (V2 xF yF), Hitbox (V2 widthF heightF) (V2 osxF osyF), Keys keys) ->
+          $ \(Platform, Position (V2 xF yF), Hitbox (V2 widthF heightF) (V2 osxF osyF)) ->
               let playerBottom  = yP - heightP / 2 + osyP
                   playerRight   = xP + widthP / 2 + osxP
                   playerLeft    = xP - widthP / 2 + osxP
                   platformLeft  = xF - widthF / 2 + osxF
                   platformRight = xF + widthF / 2 + osxF
                   platformTop   = yF + heightF / 2 + osyF
-              in  when
-                    (  (playerRight >= platformLeft)
-                    && (playerLeft <= platformRight)
-                    && (playerBottom >= platformTop)
-                    && (playerBottom + velyP * dT <= platformTop)
-                    && not (Set.member (SpecialKey KeyDown) keys)
-                    )
-                  $  etyP
-                  $= ( Position
-                       (V2 xP (yF + heightF / 2 + osyF + heightP + 1))
-                     , Velocity (V2 velxP 0)
-                     , CanJump
-                     )
+              in  do
+                    movingDown <- exists etyP $ Proxy @MovingDown
+                    when
+                        (  (playerRight >= platformLeft)
+                        && (playerLeft <= platformRight)
+                        && (playerBottom >= platformTop)
+                        && (playerBottom + velyP * dT <= platformTop)
+                        && not movingDown
+                        )
+                      $  etyP
+                      $= ( Position
+                           (V2 xP (yF + heightF / 2 + osyF + heightP + 1))
+                         , Velocity (V2 velxP 0)
+                         , CanJump
+                         )
 
   reset <- cfoldM
     (\acc (Player, Position posP) -> do
@@ -418,6 +433,7 @@ step :: Float -> System' ()
 step dT = do
   incrTime dT
   scoreStep dT
+  stepPlayerMovement
   playerJump dT
   playerShoot dT
   stepBulletPatterns dT
@@ -432,6 +448,32 @@ step dT = do
   stepParticles dT
   spawnEnemies dT
   spawnPlatforms dT
+
+stepPlayerMovement :: System' ()
+stepPlayerMovement = do
+  cmap
+    $ \(Player, Velocity (V2 _ y), Not :: Not DangerZone) -> Velocity (V2 0 y)
+  cmap $ \(Player, DangerZone) -> Velocity (V2 0 0)
+
+  cmapM $ \(Player, MovingLeft, Velocity (V2 x y), etyP) -> do
+    isDangerZone <- exists etyP $ Proxy @DangerZone
+    return $ Velocity (V2 (x - playerSpeed * if isDangerZone then 0.5 else 1) y)
+
+  cmapM $ \(Player, MovingRight, Velocity (V2 x y), etyP) -> do
+    isDangerZone <- exists etyP $ Proxy @DangerZone
+    return $ Velocity (V2 (x + playerSpeed * if isDangerZone then 0.5 else 1) y)
+
+  cmapM_ $ \(Player, MovingUp, Velocity (V2 x y), etyP) -> do
+    isDangerZone <- exists etyP $ Proxy @DangerZone
+    if isDangerZone
+      then etyP
+        $= Velocity (V2 x (y + playerSpeed * if isDangerZone then 0.5 else 1))
+      else do
+        canJump <- exists etyP $ Proxy @CanJump
+        when canJump $ etyP $= (Jumping playerJumpTime, Not @CanJump)
+
+  cmap $ \(Player, MovingDown, DangerZone, Velocity (V2 x y)) ->
+    Velocity (V2 x (y - playerSpeed / 2))
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
@@ -448,42 +490,28 @@ normalizeInput k = case k of
   key    -> key
 
 handleEvent :: Event -> System' ()
-handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) = do
-  cmap $ \(Player, Velocity (V2 x y), Not :: Not DangerZone) ->
-    Velocity (V2 (x - playerSpeed) y)
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 (x - playerSpeed / 2) y)
+handleEvent (EventKey (SpecialKey KeyLeft) Down _ _) =
+  cmap $ \Player -> MovingLeft
 
 handleEvent (EventKey (SpecialKey KeyLeft) Up _ _) =
-  cmap $ \(Player, Velocity (V2 _ y)) -> Velocity (V2 0 y)
+  cmap $ \Player -> Not @MovingLeft
 
-handleEvent (EventKey (SpecialKey KeyRight) Down _ _) = do
-  cmap $ \(Player, Velocity (V2 x y), Not :: Not DangerZone) ->
-    Velocity (V2 (x + playerSpeed) y)
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 (x + playerSpeed / 2) y)
+handleEvent (EventKey (SpecialKey KeyRight) Down _ _) =
+  cmap $ \Player -> MovingRight
 
 handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
-  cmap $ \(Player, Velocity (V2 _ y)) -> Velocity (V2 0 y)
+  cmap $ \Player -> Not @MovingRight
 
-handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = do
-  cmap $ \(Player, CanJump, Not :: Not DangerZone) ->
-    (Jumping playerJumpTime, Not @CanJump)
-  cmap $ \(Player, Velocity (V2 x _), DangerZone) ->
-    Velocity (V2 x (playerSpeed / 2))
+handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = cmap $ \Player -> MovingUp
 
-handleEvent (EventKey (SpecialKey KeyUp) Up _ _) = do
-  cmap $ \(Player, Jumping _) -> Not @Jumping
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y - playerSpeed / 2))
+handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
+  cmap $ \Player -> Not @MovingUp
 
 handleEvent (EventKey (SpecialKey KeyDown) Down _ _) =
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y - playerSpeed / 2))
+  cmap $ \Player -> MovingDown
 
 handleEvent (EventKey (SpecialKey KeyDown) Up _ _) =
-  cmap $ \(Player, Velocity (V2 x y), DangerZone) ->
-    Velocity (V2 x (y + playerSpeed / 2))
+  cmap $ \Player -> Not @MovingDown
 
 handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
 
