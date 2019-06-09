@@ -213,8 +213,9 @@ resetGame = do
   initialize
 
 stepScroll :: Float -> System' ()
-stepScroll dT = cmap $ \(Position (V2 x y), Not :: Not DangerZone) ->
-  Position (V2 (x - scrollSpeed * dT) y)
+stepScroll dT =
+  cmap $ \(Position (V2 x y), Not :: Not Player, Not :: Not Particle) ->
+    Position (V2 (x - scrollSpeed * dT) y)
 
 stepPosition :: Float -> System' ()
 stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
@@ -259,9 +260,13 @@ stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
           }
 
 stepEnemyBullets :: Float -> System' ()
-stepEnemyBullets dT = cmap $ \(EnemyBullet p s t) -> if t > 0
-  then Right $ EnemyBullet p s (t - 1 * dT)
-  else Left $ Not @(EnemyBullet, Kinetic)
+stepEnemyBullets dT = cmap $ \(EnemyBullet p s t, Position (V2 px py)) ->
+  if (t <= 0)
+       || (py > ymax + threshold || py < ymin - threshold)
+       || (px > xmax + threshold || px < xmin - threshold)
+    then Left $ Not @(EnemyBullet, Kinetic)
+    else Right $ EnemyBullet p s (t - 1 * dT)
+  where threshold = 20
 
 shootPattern :: Position -> BulletPattern -> System' ()
 shootPattern pos BulletPattern {..} = case bulletPatternType of
@@ -295,9 +300,12 @@ incrTime :: Float -> System' ()
 incrTime dT = modify global $ \(Time t) -> Time (t + dT)
 
 scoreStep :: Float -> System' ()
-scoreStep dT = cmapM $ \Player -> do
-  canDZ <- canDangerZone
-  let scoreBonus = if canDZ then 2 else 1
+scoreStep dT = cmapM $ \(Player, Position posP) -> do
+  scoreBonus <- cfold
+    (\acc (EnemyBullet{}, Position posE) ->
+      acc + if norm (posP - posE) < dangerZoneRange then 1 else 0
+    )
+    0
   modify global $ \(Score s, HighScore hs) ->
     ( Score (s + dT * scoreTimeMod * scoreBonus)
     , HighScore (if s > hs then s else hs)
