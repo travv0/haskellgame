@@ -27,6 +27,7 @@ dependencies:
 - random
 - containers
 - vector
+- gloss
 
 library:
   source-dirs: src

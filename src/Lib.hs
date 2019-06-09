@@ -567,6 +567,8 @@ draw = do
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
   enemyBullets <- foldDraw $ \(EnemyBullet pic size _, pos) ->
     translate' pos . color white . scale size size $ pic
+  enemyBulletRanges <- foldDraw $ \(EnemyBullet{}, pos) ->
+    translate' pos . color (greyN 0.1) $ circleSolid 100
   platforms <- foldDraw $ \(Platform, pos, Hitbox (V2 w h) _) ->
     translate' pos . color white . scale w h $ box
   -- hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
@@ -594,7 +596,8 @@ draw = do
           ++ show (round hs :: Integer)
 
   return
-    $  player
+    $  enemyBulletRanges
+    <> player
     <> enemys
     <> bullets
     <> score
