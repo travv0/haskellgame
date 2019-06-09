@@ -359,7 +359,7 @@ handleCollisions dT = do
                     when
                         (  (playerRight >= platformLeft)
                         && (playerLeft <= platformRight)
-                        && (playerBottom >= platformTop)
+                        && (playerBottom > platformTop)
                         && (playerBottom + velyP * dT <= platformTop)
                         && not movingDown
                         )
