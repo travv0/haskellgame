@@ -203,8 +203,7 @@ resetGame = do
   cmapM_
     $ \(Enemy, ety) -> destroy ety $ Proxy @(Enemy, Kinetic, ShootsPatterns)
   cmapM_ $ \(Bullet, ety) -> destroy ety $ Proxy @(Bullet, Kinetic)
-  cmapM_
-    $ \(EnemyBullet _ _ _, ety) -> destroy ety $ Proxy @(EnemyBullet, Kinetic)
+  cmapM_ $ \(EnemyBullet{}, ety) -> destroy ety $ Proxy @(EnemyBullet, Kinetic)
   cmapM_ $ \(Platform, ety) -> destroy ety $ Proxy @(Platform, Kinetic)
   initialize
 
@@ -318,7 +317,7 @@ stepBullets = cmap $ \(Bullet, Position (V2 px py)) ->
 canDangerZone :: System' Bool
 canDangerZone = flip cfoldM False $ \acc (Player, Position posP) -> do
   inDZ <- cfold
-    (\innerAcc (EnemyBullet _ _ _, Position posE) ->
+    (\innerAcc (EnemyBullet{}, Position posE) ->
       innerAcc || (norm (posP - posE) < 100)
     )
     False
@@ -337,9 +336,8 @@ handleCollisions dT = do
   cmapM_
     $ \(Player, Position posP, Hitpoint hpP _, etyP, Keys keys, Velocity velP) ->
         do
-          canDZ <-
-            flip cfold False $ \acc (EnemyBullet _ _ _, Position posE) ->
-              acc || (norm (posP - posE) < 100)
+          canDZ <- flip cfold False $ \acc (EnemyBullet{}, Position posE) ->
+            acc || (norm (posP - posE) < 100)
           isDangerZone <- exists etyP $ Proxy @DangerZone
           let leaveDangerZone = when isDangerZone $ do
                 etyP $= Not @DangerZone
