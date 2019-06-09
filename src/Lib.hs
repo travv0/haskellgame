@@ -407,7 +407,7 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 spawnEnemies :: Float -> System' ()
 spawnEnemies dT = do
   enemyy               <- liftIO $ randomRIO (ymin, ymax)
-  enemyRate            <- liftIO $ randomRIO (1 :: Float, 7000)
+  enemyRate            <- liftIO $ randomRIO (1 :: Float, 5000)
   enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
   enemyInterval        <- liftIO $ randomRIO (1 :: Float, 5)
   enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
@@ -421,10 +421,10 @@ spawnEnemies dT = do
             { bulletPatternInterval       = FixedInterval enemyInitialInterval
                                                           enemyInterval
             , bulletPatternBulletPicture  = diamond
-            , bulletPatternType = RandomPattern (1, 5) (-100, 100) (-100, 100)
+            , bulletPatternType = RandomPattern (5, 10) (-100, 100) (-100, 100)
             , bulletPatternBulletsPerStep = 3
             , bulletPatternShootTime      = 0.2
-            , bulletPatternShootTimes     = ShootTimes 0 5
+            , bulletPatternShootTimes     = ShootTimes 0 10
             }
         ]
       )
@@ -459,7 +459,7 @@ step dT = do
   stepEnemyBullets dT
   stepParticles dT
   spawnEnemies dT
-  spawnPlatforms dT
+  -- spawnPlatforms dT
 
 stepPlayerMovement :: System' ()
 stepPlayerMovement = do
