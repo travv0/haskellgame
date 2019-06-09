@@ -166,7 +166,7 @@ ymax = 170
 cooldownAdjust = 100
 scrollSpeed = 50
 scoreTimeMod = 10
-dangerZoneRange = 100
+dangerZoneRange = 60
 
 hitBonus :: Int
 hitBonus = 100
@@ -213,8 +213,8 @@ resetGame = do
   initialize
 
 stepScroll :: Float -> System' ()
-stepScroll dT =
-  cmap $ \(Position (V2 x y)) -> Position (V2 (x - scrollSpeed * dT) y)
+stepScroll dT = cmap $ \(Position (V2 x y), Not :: Not DangerZone) ->
+  Position (V2 (x - scrollSpeed * dT) y)
 
 stepPosition :: Float -> System' ()
 stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
