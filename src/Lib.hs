@@ -69,6 +69,9 @@ instance Component Jumping where type Storage Jumping = Unique Jumping
 data Hitbox = Hitbox (V2 Float) (V2 Float) deriving Show
 instance Component Hitbox where type Storage Hitbox = Map Hitbox
 
+data Hitpoint = Hitpoint (V2 Float) (V2 Float) deriving Show
+instance Component Hitpoint where type Storage Hitpoint = Unique Hitpoint
+
 data IsShooting = IsShooting Float Direction deriving Show
 instance Component IsShooting where type Storage IsShooting = Unique IsShooting
 
@@ -131,6 +134,7 @@ makeWorld "World"
   , ''CanJump
   , ''Platform
   , ''Hitbox
+  , ''Hitpoint
   , ''ShootsPatterns
   , ''EnemyBullet
   , ''DangerZone
@@ -175,6 +179,7 @@ initialize = do
     , Velocity 0
     , Gravity gravity
     , Hitbox (V2 10 20) (V2 0 (-10))
+    , Hitpoint (V2 10 20) (V2 0 (-12))
     )
   _platformEty <- newEntity
     (Platform, Position $ playerPos + V2 5 (-25), Hitbox (V2 400 2) 0)
@@ -209,6 +214,10 @@ stepScroll dT =
 
 stepPosition :: Float -> System' ()
 stepPosition dT = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
+
+stepHitpoint :: System' ()
+stepHitpoint = cmap $ \(Player, Position (V2 x y), Hitpoint _ (V2 dx dy)) ->
+  Hitpoint (V2 (x + dx) (y + dy)) (V2 dx dy)
 
 stepVelocity :: Float -> System' ()
 stepVelocity dT =
@@ -269,16 +278,12 @@ playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
 playerShoot :: Float -> System' ()
 playerShoot dT =
   cmapM_
-    $ \(Player, pos, Velocity (V2 x y), IsShooting cooldown dir) ->
+    $ \(Player, Position pos, Velocity (V2 x _), IsShooting cooldown dir) ->
         if cooldown <= 0
           then do
             let dirMod = if dir == L then negate else id
             _ <- newEntity
-              (Bullet, pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
-            spawnParticles 7
-                           pos
-                           (dirMod (10 + x * dT), dirMod (100 + x * dT))
-                           (-80 + y * dT        , 80 + y * dT)
+              (Bullet, Position pos, Velocity (V2 (dirMod bulletSpeed + x) 0))
             cmap $ \Player -> IsShooting playerBulletCooldown dir
           else cmap $ \Player -> IsShooting (cooldown - cooldownAdjust * dT) dir
 
@@ -329,20 +334,22 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
-  cmapM_ $ \(Player, Position posP, etyP, Keys keys, Velocity velP) -> do
-    canDZ <- flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
-      acc || (norm (posP - posE) < 100)
-    isDangerZone <- exists etyP $ Proxy @DangerZone
-    let leaveDangerZone = when isDangerZone $ do
-          etyP $= Not @DangerZone
-          etyP $= Velocity (velP * 2)
-    if canDZ || (canDZ && not isDangerZone)
-      then do
-        spawnParticles 5 (Position posP) (-20, 20) (-20, 20)
-        if Set.member (Char 'z') keys
-          then etyP $= DangerZone
-          else leaveDangerZone
-      else leaveDangerZone
+  cmapM_
+    $ \(Player, Position posP, Hitpoint hpP _, etyP, Keys keys, Velocity velP) ->
+        do
+          canDZ <- flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
+            acc || (norm (posP - posE) < 100)
+          isDangerZone <- exists etyP $ Proxy @DangerZone
+          let leaveDangerZone = when isDangerZone $ do
+                etyP $= Not @DangerZone
+                etyP $= Velocity (velP * 2)
+          if canDZ || (canDZ && not isDangerZone)
+            then do
+              spawnParticles 5 (Position hpP) (-20, 20) (-20, 20)
+              if Set.member (Char 'z') keys
+                then etyP $= DangerZone
+                else leaveDangerZone
+            else leaveDangerZone
 
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
@@ -371,7 +378,7 @@ handleCollisions dT = do
                          )
 
   reset <- cfoldM
-    (\acc (Player, Position posP) -> do
+    (\acc (Player, Hitpoint posP _) -> do
       r <- cfold
         (\innerAcc (EnemyBullet _ t, Position posB) ->
           innerAcc || t > dT * 2 && norm (posP - posB) < 6
@@ -444,6 +451,7 @@ step dT = do
   stepBulletPatterns dT
   stepVelocity dT
   stepPosition dT
+  stepHitpoint
   handleCollisions dT
   stepScroll dT
   clampPlayer
