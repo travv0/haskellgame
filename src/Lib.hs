@@ -42,7 +42,7 @@ instance Component Bullet where type Storage Bullet = Map Bullet
 data DangerZone = DangerZone deriving Show
 instance Component DangerZone where type Storage DangerZone = Unique DangerZone
 
-data EnemyBullet = EnemyBullet Picture Float deriving Show
+data EnemyBullet = EnemyBullet Picture Float Float deriving Show
 instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
 
 data Platform = Platform deriving Show
@@ -204,7 +204,7 @@ resetGame = do
     $ \(Enemy, ety) -> destroy ety $ Proxy @(Enemy, Kinetic, ShootsPatterns)
   cmapM_ $ \(Bullet, ety) -> destroy ety $ Proxy @(Bullet, Kinetic)
   cmapM_
-    $ \(EnemyBullet _ _, ety) -> destroy ety $ Proxy @(EnemyBullet, Kinetic)
+    $ \(EnemyBullet _ _ _, ety) -> destroy ety $ Proxy @(EnemyBullet, Kinetic)
   cmapM_ $ \(Platform, ety) -> destroy ety $ Proxy @(Platform, Kinetic)
   initialize
 
@@ -255,8 +255,8 @@ stepBulletPatterns dT = cmapM $ \(ShootsPatterns patterns, Position pos) ->
           }
 
 stepEnemyBullets :: Float -> System' ()
-stepEnemyBullets dT = cmap $ \(EnemyBullet p t) -> if t > 0
-  then Right $ EnemyBullet p (t - 1 * dT)
+stepEnemyBullets dT = cmap $ \(EnemyBullet p s t) -> if t > 0
+  then Right $ EnemyBullet p s (t - 1 * dT)
   else Left $ Not @(EnemyBullet, Kinetic)
 
 shootPattern :: Position -> BulletPattern -> System' ()
@@ -266,7 +266,7 @@ shootPattern pos BulletPattern {..} = case bulletPatternType of
     vy <- liftIO $ randomRIO dvy
     t  <- liftIO $ randomRIO dt
     newEntity
-      (EnemyBullet bulletPatternBulletPicture t, pos, Velocity (V2 vx vy))
+      (EnemyBullet bulletPatternBulletPicture 4 t, pos, Velocity (V2 vx vy))
 
 playerJump :: Float -> System' ()
 playerJump dT = cmap $ \(Player, Jumping jumpTime, Velocity (V2 x _)) ->
@@ -318,7 +318,7 @@ stepBullets = cmap $ \(Bullet, Position (V2 px py)) ->
 canDangerZone :: System' Bool
 canDangerZone = flip cfoldM False $ \acc (Player, Position posP) -> do
   inDZ <- cfold
-    (\innerAcc (EnemyBullet _ _, Position posE) ->
+    (\innerAcc (EnemyBullet _ _ _, Position posE) ->
       innerAcc || (norm (posP - posE) < 100)
     )
     False
@@ -337,8 +337,9 @@ handleCollisions dT = do
   cmapM_
     $ \(Player, Position posP, Hitpoint hpP _, etyP, Keys keys, Velocity velP) ->
         do
-          canDZ <- flip cfold False $ \acc (EnemyBullet _ _, Position posE) ->
-            acc || (norm (posP - posE) < 100)
+          canDZ <-
+            flip cfold False $ \acc (EnemyBullet _ _ _, Position posE) ->
+              acc || (norm (posP - posE) < 100)
           isDangerZone <- exists etyP $ Proxy @DangerZone
           let leaveDangerZone = when isDangerZone $ do
                 etyP $= Not @DangerZone
@@ -380,8 +381,8 @@ handleCollisions dT = do
   reset <- cfoldM
     (\acc (Player, Hitpoint posP _) -> do
       r <- cfold
-        (\innerAcc (EnemyBullet _ t, Position posB) ->
-          innerAcc || t > dT * 2 && norm (posP - posB) < 6
+        (\innerAcc (EnemyBullet _ size t, Position posB) ->
+          innerAcc || t > dT * 2 && norm (posP - posB) < size
         )
         False
       return $ acc || r
@@ -566,8 +567,8 @@ draw = do
     $ \(Enemy, pos) -> translate' pos . color white . scale 10 10 $ diamond
   bullets <- foldDraw
     $ \(Bullet, pos) -> translate' pos . color white . scale 4 4 $ diamond
-  enemyBullets <- foldDraw $ \(EnemyBullet pic _, pos) ->
-    translate' pos . color white . scale 4 4 $ pic
+  enemyBullets <- foldDraw $ \(EnemyBullet pic size _, pos) ->
+    translate' pos . color white . scale size size $ pic
   platforms <- foldDraw $ \(Platform, pos, Hitbox (V2 w h) _) ->
     translate' pos . color white . scale w h $ box
   -- hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
