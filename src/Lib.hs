@@ -401,7 +401,7 @@ spawnParticles n pos dvx dvy = replicateM_ n $ do
 spawnEnemies :: Float -> System' ()
 spawnEnemies dT = do
   enemyy               <- liftIO $ randomRIO (ymin, ymax)
-  enemyRate            <- liftIO $ randomRIO (1 :: Float, 3)
+  enemyRate            <- liftIO $ randomRIO (1 :: Float, 7000)
   enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
   enemyInterval        <- liftIO $ randomRIO (1 :: Float, 5)
   enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
@@ -422,17 +422,16 @@ spawnEnemies dT = do
             }
         ]
       )
-  anyEnemies      <- cfold (\acc Enemy -> acc || True) False
-  anyEnemyBullets <- cfold (\acc (EnemyBullet _ _) -> acc || True) False
-  if not (anyEnemies || anyEnemyBullets)
-    then void newEnemy
-    else triggerEvery dT enemyRate 0 newEnemy
+  anyEnemies <- cfold (\acc Enemy -> acc || True) False
+  when (not anyEnemies || enemyRate * dT < 1) $ void newEnemy
 
 spawnPlatforms :: Float -> System' ()
 spawnPlatforms dT = do
-  platformy      <- liftIO $ randomRIO (ymin, ymax - 40)
-  platformLength <- liftIO $ randomRIO (10, xmax)
-  triggerEvery dT 3 0 $ newEntity
+  platformy           <- liftIO $ randomRIO (ymin, 10)
+  platformLength      <- liftIO $ randomRIO (10, xmax)
+  platformSpawnChance <- liftIO
+    $ randomRIO (platformLength, platformLength + xmax)
+  when (platformSpawnChance * dT < 1) $ void $ newEntity
     (Platform, Position (V2 xmax platformy), Hitbox (V2 platformLength 2) 0)
 
 step :: Float -> System' ()
