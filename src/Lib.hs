@@ -42,6 +42,9 @@ instance Component Bullet where type Storage Bullet = Map Bullet
 data DangerZone = DangerZone deriving Show
 instance Component DangerZone where type Storage DangerZone = Unique DangerZone
 
+data Focus = Focus deriving Show
+instance Component Focus where type Storage Focus = Unique Focus
+
 data EnemyBullet = EnemyBullet Picture Float Float deriving Show
 instance Component EnemyBullet where type Storage EnemyBullet = Map EnemyBullet
 
@@ -138,6 +141,7 @@ makeWorld "World"
   , ''ShootsPatterns
   , ''EnemyBullet
   , ''DangerZone
+  , ''Focus
   , ''MovingUp
   , ''MovingRight
   , ''MovingDown
@@ -147,7 +151,7 @@ makeWorld "World"
 type System' a = System World a
 type Kinetic = (Position, Velocity)
 
-playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, xmin, xmax, ymin, ymax, cooldownAdjust, scrollSpeed, scoreTimeMod
+playerSpeed, playerBulletCooldown, jumpVelocity, playerJumpTime, gravity, bulletSpeed, xmin, xmax, ymin, ymax, cooldownAdjust, scrollSpeed, scoreTimeMod, dangerZoneRange
   :: Float
 playerSpeed = 170
 playerBulletCooldown = 2
@@ -162,6 +166,7 @@ ymax = 170
 cooldownAdjust = 100
 scrollSpeed = 50
 scoreTimeMod = 10
+dangerZoneRange = 100
 
 hitBonus :: Int
 hitBonus = 100
@@ -318,7 +323,7 @@ canDangerZone :: System' Bool
 canDangerZone = flip cfoldM False $ \acc (Player, Position posP) -> do
   inDZ <- cfold
     (\innerAcc (EnemyBullet{}, Position posE) ->
-      innerAcc || (norm (posP - posE) < 100)
+      innerAcc || (norm (posP - posE) < dangerZoneRange)
     )
     False
   return $ acc || inDZ
@@ -333,22 +338,17 @@ handleCollisions dT = do
         spawnParticles 50 (Position posB) (-200, 200) (-200, 200)
         global $~ \(Score x) -> Score (x + fromIntegral hitBonus)
 
-  cmapM_
-    $ \(Player, Position posP, Hitpoint hpP _, etyP, Keys keys, Velocity velP) ->
-        do
-          canDZ <- flip cfold False $ \acc (EnemyBullet{}, Position posE) ->
-            acc || (norm (posP - posE) < 100)
-          isDangerZone <- exists etyP $ Proxy @DangerZone
-          let leaveDangerZone = when isDangerZone $ do
-                etyP $= Not @DangerZone
-                etyP $= Velocity (velP * 2)
-          if canDZ || (canDZ && not isDangerZone)
-            then do
-              spawnParticles 5 (Position hpP) (-20, 20) (-20, 20)
-              if Set.member (Char 'z') keys
-                then etyP $= DangerZone
-                else leaveDangerZone
-            else leaveDangerZone
+  cmapM_ $ \(Player, Hitpoint hpP _, etyP, Velocity velP) -> do
+    canDZ        <- canDangerZone
+    isDangerZone <- exists etyP $ Proxy @DangerZone
+    let leaveDangerZone = when isDangerZone $ do
+          etyP $= Not @DangerZone
+          etyP $= Velocity (velP * 2)
+    if canDZ || (canDZ && not isDangerZone)
+      then do
+        spawnParticles 5 (Position hpP) (-20, 20) (-20, 20)
+        etyP $= DangerZone
+      else leaveDangerZone
 
   cmapM_
     $ \(Player, Position (V2 xP yP), Hitbox (V2 widthP heightP) (V2 osxP osyP), Velocity (V2 velxP velyP), etyP) ->
@@ -468,24 +468,26 @@ stepPlayerMovement = do
   cmap $ \(Player, DangerZone) -> Velocity (V2 0 0)
 
   cmapM $ \(Player, MovingLeft, Velocity (V2 x y), etyP) -> do
-    isDangerZone <- exists etyP $ Proxy @DangerZone
-    return $ Velocity (V2 (x - playerSpeed * if isDangerZone then 0.5 else 1) y)
+    isFocussed <- exists etyP $ Proxy @Focus
+    return $ Velocity (V2 (x - playerSpeed * if isFocussed then 0.5 else 1) y)
 
   cmapM $ \(Player, MovingRight, Velocity (V2 x y), etyP) -> do
-    isDangerZone <- exists etyP $ Proxy @DangerZone
-    return $ Velocity (V2 (x + playerSpeed * if isDangerZone then 0.5 else 1) y)
+    isFocussed <- exists etyP $ Proxy @Focus
+    return $ Velocity (V2 (x + playerSpeed * if isFocussed then 0.5 else 1) y)
 
   cmapM_ $ \(Player, MovingUp, Velocity (V2 x y), etyP) -> do
+    isFocussed   <- exists etyP $ Proxy @Focus
     isDangerZone <- exists etyP $ Proxy @DangerZone
     if isDangerZone
       then etyP
-        $= Velocity (V2 x (y + playerSpeed * if isDangerZone then 0.5 else 1))
+        $= Velocity (V2 x (y + playerSpeed * if isFocussed then 0.5 else 1))
       else do
         canJump <- exists etyP $ Proxy @CanJump
         when canJump $ etyP $= (Jumping playerJumpTime, Not @CanJump)
 
-  cmap $ \(Player, MovingDown, DangerZone, Velocity (V2 x y)) ->
-    Velocity (V2 x (y - playerSpeed / 2))
+  cmapM $ \(Player, MovingDown, DangerZone, Velocity (V2 x y), etyP) -> do
+    isFocussed <- exists etyP $ Proxy @Focus
+    return $ Velocity (V2 x (y - playerSpeed * if isFocussed then 0.5 else 1))
 
 handleInput :: Event -> System' Event
 handleInput event@(EventKey k Down _ _) = do
@@ -525,24 +527,30 @@ handleEvent (EventKey (SpecialKey KeyDown) Down _ _) =
 handleEvent (EventKey (SpecialKey KeyDown) Up _ _) =
   cmap $ \Player -> Not @MovingDown
 
+handleEvent (EventKey (SpecialKey KeyShiftL) Down _ _) =
+  cmap $ \Player -> Focus
+
+handleEvent (EventKey (SpecialKey KeyShiftL) Up _ _) =
+  cmap $ \Player -> Not @Focus
+
 handleEvent (EventKey (SpecialKey KeyEsc) Down _ _) = liftIO exitSuccess
 
 handleEvent (EventKey c                   Down _ _) = case normalizeInput c of
-  Char 'c' -> do
+  Char 'x' -> do
     cmap $ \Player -> IsShooting 0 R
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown R
-  Char 'x' -> do
+  Char 'z' -> do
     cmap $ \Player -> IsShooting 0 L
     cmap $ \(Player, IsShooting cooldown _) -> IsShooting cooldown L
   _ -> return ()
 
 handleEvent (EventKey c Up _ _) = case normalizeInput c of
-  Char 'c' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
-    if Set.member (normalizeInput (Char 'x')) keys
+  Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'z')) keys
       then set e (IsShooting timeout L)
       else destroy e (Proxy @IsShooting)
-  Char 'x' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
-    if Set.member (normalizeInput (Char 'c')) keys
+  Char 'z' -> cmapM_ $ \(Player, IsShooting timeout _, Keys keys, e) ->
+    if Set.member (normalizeInput (Char 'x')) keys
       then set e (IsShooting timeout R)
       else destroy e (Proxy @IsShooting)
   _ -> return ()
@@ -568,7 +576,7 @@ draw = do
   enemyBullets <- foldDraw $ \(EnemyBullet pic size _, pos) ->
     translate' pos . color white . scale size size $ pic
   enemyBulletRanges <- foldDraw $ \(EnemyBullet{}, pos) ->
-    translate' pos . color (greyN 0.1) $ circleSolid 100
+    translate' pos . color (greyN 0.1) $ circleSolid dangerZoneRange
   platforms <- foldDraw $ \(Platform, pos, Hitbox (V2 w h) _) ->
     translate' pos . color white . scale w h $ box
   -- hitboxes <- foldDraw $ \(Hitbox (V2 w h) offset, Position pos) ->
