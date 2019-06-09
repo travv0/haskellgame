@@ -217,7 +217,7 @@ stepVelocity dT =
 
 clampPlayer :: System' ()
 clampPlayer =
-  cmapM $ \(Player, Position (V2 x y), ety) -> if x < xmin - 10 || y < ymin - 20
+  cmapM $ \(Player, Position (V2 x y), ety) -> if x < xmin - 20 || y < ymin - 20
     then resetGame
     else ety $= Position (V2 (min xmax x) (min ymax y))
 
@@ -405,22 +405,28 @@ spawnEnemies dT = do
   enemyVel             <- liftIO $ randomRIO (-10 :: Float, -100)
   enemyInterval        <- liftIO $ randomRIO (1 :: Float, 5)
   enemyInitialInterval <- liftIO $ randomRIO (0, enemyInterval)
-  triggerEvery dT enemyRate 0 $ newEntity
-    ( Enemy
-    , Position (V2 xmax enemyy)
-    , Velocity (V2 enemyVel 0)
-    , ShootsPatterns $ V.fromList
-      [ BulletPattern
-          { bulletPatternInterval       = FixedInterval enemyInitialInterval
-                                                        enemyInterval
-          , bulletPatternBulletPicture  = diamond
-          , bulletPatternType = RandomPattern (1, 5) (-100, 100) (-100, 100)
-          , bulletPatternBulletsPerStep = 3
-          , bulletPatternShootTime      = 0.2
-          , bulletPatternShootTimes     = ShootTimes 0 5
-          }
-      ]
-    )
+  let
+    newEnemy = newEntity
+      ( Enemy
+      , Position (V2 xmax enemyy)
+      , Velocity (V2 enemyVel 0)
+      , ShootsPatterns $ V.fromList
+        [ BulletPattern
+            { bulletPatternInterval       = FixedInterval enemyInitialInterval
+                                                          enemyInterval
+            , bulletPatternBulletPicture  = diamond
+            , bulletPatternType = RandomPattern (1, 5) (-100, 100) (-100, 100)
+            , bulletPatternBulletsPerStep = 3
+            , bulletPatternShootTime      = 0.2
+            , bulletPatternShootTimes     = ShootTimes 0 5
+            }
+        ]
+      )
+  anyEnemies      <- cfold (\acc Enemy -> acc || True) False
+  anyEnemyBullets <- cfold (\acc (EnemyBullet _ _) -> acc || True) False
+  if not (anyEnemies || anyEnemyBullets)
+    then void newEnemy
+    else triggerEvery dT enemyRate 0 newEnemy
 
 spawnPlatforms :: Float -> System' ()
 spawnPlatforms dT = do
@@ -505,7 +511,7 @@ handleEvent (EventKey (SpecialKey KeyRight) Up _ _) =
 handleEvent (EventKey (SpecialKey KeyUp) Down _ _) = cmap $ \Player -> MovingUp
 
 handleEvent (EventKey (SpecialKey KeyUp) Up _ _) =
-  cmap $ \Player -> Not @MovingUp
+  cmap $ \Player -> (Not @MovingUp, Not @Jumping)
 
 handleEvent (EventKey (SpecialKey KeyDown) Down _ _) =
   cmap $ \Player -> MovingDown
